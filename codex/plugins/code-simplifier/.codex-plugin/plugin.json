@@ -1,0 +1,20 @@
+{
+  "name": "code-simplifier",
+  "version": "1.0.0",
+  "description": "Codex adaptation of Anthropic's upstream code-simplifier plugin",
+  "author": {
+    "name": "liunyl"
+  },
+  "repository": "https://github.com/liunyl/gated-development-skills",
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Code Simplifier",
+    "shortDescription": "Simplify code while preserving its behavior.",
+    "longDescription": "A Codex adaptation of Anthropic's upstream code simplifier.",
+    "developerName": "liunyl",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Simplify the recent changes while preserving behavior."
+  }
+}

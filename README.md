@@ -20,3 +20,24 @@ cp -R codex/skills/claude-gated-development ~/.codex/skills/
 ```
 
 That's it — each tool auto-discovers skills under its `skills/` dir.
+
+## Install Codex plugin adapters
+
+From the repository root:
+
+```bash
+codex plugin marketplace add .
+codex plugin add pr-review-toolkit@gated-development-skills
+codex plugin add code-simplifier@gated-development-skills
+codex plugin add frontend-design@claude-plugins-official
+```
+
+Or add the marketplace directly from GitHub:
+
+```bash
+codex plugin marketplace add liunyl/gated-development-skills --ref master
+```
+
+The first two plugins adapt upstream Claude-only `agents/` and `commands/`
+layouts into Codex skills. Frontend Design already contains a Codex-compatible
+skill, so install it directly from the official marketplace.
