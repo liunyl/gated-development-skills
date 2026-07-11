@@ -8,7 +8,7 @@
       "name": "pr-review-toolkit",
       "source": {
         "source": "local",
-        "path": "./plugins/pr-review-toolkit"
+        "path": "./codex/plugins/pr-review-toolkit"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -20,7 +20,7 @@
       "name": "code-simplifier",
       "source": {
         "source": "local",
-        "path": "./plugins/code-simplifier"
+        "path": "./codex/plugins/code-simplifier"
       },
       "policy": {
         "installation": "AVAILABLE",

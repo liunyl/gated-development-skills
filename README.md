@@ -26,10 +26,16 @@ That's it — each tool auto-discovers skills under its `skills/` dir.
 From the repository root:
 
 ```bash
-codex plugin marketplace add ./codex
+codex plugin marketplace add .
 codex plugin add pr-review-toolkit@gated-development-skills
 codex plugin add code-simplifier@gated-development-skills
 codex plugin add frontend-design@claude-plugins-official
+```
+
+Or add the marketplace directly from GitHub:
+
+```bash
+codex plugin marketplace add liunyl/gated-development-skills --ref master
 ```
 
 The first two plugins adapt upstream Claude-only `agents/` and `commands/`
