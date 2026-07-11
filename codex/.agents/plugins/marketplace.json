@@ -1,0 +1,32 @@
+{
+  "name": "gated-development-skills",
+  "interface": {
+    "displayName": "Gated Development Skills"
+  },
+  "plugins": [
+    {
+      "name": "pr-review-toolkit",
+      "source": {
+        "source": "local",
+        "path": "./plugins/pr-review-toolkit"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "code-simplifier",
+      "source": {
+        "source": "local",
+        "path": "./plugins/code-simplifier"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

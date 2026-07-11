@@ -1,0 +1,20 @@
+{
+  "name": "pr-review-toolkit",
+  "version": "1.0.0",
+  "description": "Codex adaptation of Anthropic's upstream pr-review-toolkit plugin",
+  "author": {
+    "name": "liunyl"
+  },
+  "repository": "https://github.com/liunyl/gated-development-skills",
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Pr Review Toolkit",
+    "shortDescription": "Review pull requests with focused review lanes.",
+    "longDescription": "A Codex adaptation of Anthropic's upstream PR review toolkit.",
+    "developerName": "liunyl",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Review this pull request with the applicable review lanes."
+  }
+}
