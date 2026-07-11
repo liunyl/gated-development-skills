@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude-Gated Development"
+  short_description: "Gate engineering work with independent Claude reviews"
+  default_prompt: "Use $claude-gated-development to execute this task with independent Claude review gates."
