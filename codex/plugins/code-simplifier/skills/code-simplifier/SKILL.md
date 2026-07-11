@@ -5,6 +5,8 @@ description: Use when recently written or modified code should be simplified for
 
 # Code Simplifier
 
+> **IMPORTANT — CODEX ADAPTATION NOTICE:** This skill is adapted from Anthropic's upstream `code-simplifier` agent.
+
 Simplify code without changing its behavior, interfaces, or established repository conventions.
 
 ## Workflow

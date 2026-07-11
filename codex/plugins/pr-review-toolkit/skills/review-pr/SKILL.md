@@ -5,6 +5,8 @@ description: Use when reviewing a pull request, branch diff, commit range, or wo
 
 # Review PR
 
+> **IMPORTANT — CODEX ADAPTATION NOTICE:** This skill is adapted from Anthropic's upstream `review-pr` command and agents.
+
 Review only the selected changes. Treat review and mutation as separate operations.
 
 ## Workflow
