@@ -85,7 +85,7 @@ Any mutation after a clearing pass reopens the gate, including a rename, comment
 | 4. **Gate #2** | Run `claude-review.sh adversarial` on the detailed implementation plan; converge the shared gate. | Required before code |
 | 5. Implement | Use `superpowers:subagent-driven-development` or `superpowers:executing-plans`, as applicable. | — |
 | 6. Verify | Use `superpowers:verification-before-completion`; run the relevant tests and checks with current output. | — |
-| 7. Simplify/review | Run a focused simplification pass, then use `superpowers:requesting-code-review`; triage findings. | — |
+| 7. Simplify/review | Use `code-simplifier:code-simplifier` on the complete task diff, then use `pr-review-toolkit:review-pr`; triage findings and rerun affected validation after fixes. | Required before final Claude gate |
 | 8. **Gate #3** | Run `claude-review.sh code` on the complete final diff; converge the shared gate. | Required before done |
 | 9. Finish | Use `superpowers:finishing-a-development-branch` when working on a branch. | — |
 
@@ -136,6 +136,8 @@ Stop and run the missing gate when:
 ## Quick reference
 
 - Planning/design gate: `claude-review.sh adversarial`.
+- Codex simplification pass: `code-simplifier:code-simplifier`.
+- Codex PR review: `pr-review-toolkit:review-pr`.
 - Final code gate: `claude-review.sh code`.
 - Full task/branch scope: add `--base <commit-before-task>`.
 - Reviewer focus: add `--focus "<artifact paths and risk classes>"`.
