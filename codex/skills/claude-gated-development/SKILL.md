@@ -32,7 +32,9 @@ Use:
 "$RUNNER" code --base <commit-before-task> --focus "Review the final implementation against <plan path>."
 ```
 
-The wrapper starts a fresh, non-persistent Claude session with `dontAsk` plus an explicit read-only tool surface. It precomputes the Git scope into a temporary review bundle, removes Bash and file-edit tools, and keeps only `Read`, `Glob`, `Grep`, `Skill`, and `Agent`. Among skills it denies only `Skill(codex-gated-development)` to prevent recursive delegation; Claude may use other skills and subagents within the same read-only surface. It disables user/project/plugin hooks, skill shell expansion, and MCP servers for the invocation, rejects empty review targets, and fingerprints repository state before and after Claude runs. Any detected mutation fails the gate.
+The wrapper reuses one persistent Claude session for the same Codex task and repository, keyed by `CODEX_THREAD_ID`. Set `CLAUDE_REVIEW_SESSION_KEY` to override the task key; without either key it keeps the old fresh, non-persistent behavior. Session continuity trades cold-start independence for less repeated context loading: Claude remains independent from the implementer, but later gates retain its earlier review context. If a saved session cannot resume, the wrapper retries once with a new session.
+
+Every invocation still uses `dontAsk` plus an explicit read-only tool surface. The wrapper precomputes the current Git scope into a temporary review bundle, removes Bash and file-edit tools, and keeps only `Read`, `Glob`, `Grep`, `Skill`, and `Agent`. Among skills it denies only `Skill(codex-gated-development)` to prevent recursive delegation; Claude may use other skills and subagents within the same read-only surface. It disables user/project/plugin hooks, skill shell expansion, and MCP servers for the invocation, rejects empty review targets, and fingerprints repository state before and after Claude runs. Any detected mutation fails the gate. Review calls for one task are serial; start a new Codex task or set a different session key when the task changes.
 
 Managed-policy hooks cannot be disabled by a session-level setting. If an untrusted managed hook is configured, do not run the reviewer against the live repository; report the gate blocked. A mutation failure detects but does not undo external changes.
 
@@ -64,7 +66,7 @@ For every gate:
    - Wrong, YAGNI, duplicate, or inapplicable: record a technical rebuttal; do not implement it.
    - Ambiguous or conflicting with a user decision: escalate to the user.
 4. Re-run Claude against the current artifact.
-5. Clear the gate only when a fresh re-run sees the final state and surfaces no valid, unaddressed blocking finding.
+5. Clear the gate only when a new reviewer turn sees the final state and surfaces no valid, unaddressed blocking finding.
 
 Any mutation after a clearing pass reopens the gate, including a rename, comment, constant, or cleanup. The clearing review must be the last operation that changes the artifact before it advances.
 
@@ -72,7 +74,7 @@ Any mutation after a clearing pass reopens the gate, including a rename, comment
 
 - Split findings into **blocking** (correctness, look-ahead, sizing, spec violation, security) and **residual** (style, optional alternatives, speculative hardening).
 - Presume correctness, look-ahead, sizing, and security findings valid until code evidence disproves them. Never relabel them residual to end the loop.
-- Clear the gate when a fresh re-run has no valid unaddressed blocking finding. Record residuals instead of chasing a literally empty report.
+- Clear the gate when a new reviewer turn has no valid unaddressed blocking finding. Record residuals instead of chasing a literally empty report.
 - Require monotone progress. If a fix introduces a new blocking defect, or the blocking set fails to shrink for about three rounds, stop and escalate to the user. Do not silently ship an unconverged gate.
 
 ## Engineering Mode
@@ -114,11 +116,11 @@ Any signal-timing, fill, aggressor-sign, or session-timezone logic shared by the
 | “I fixed everything; a re-run is unnecessary.” | Fixes are unreviewed until Claude sees the resulting state. |
 | “The gate cleared before this final cleanup.” | A post-gate mutation ships state the gate never reviewed. Re-run or revert it. |
 | “Run the backtest first to see whether it has legs.” | A look-ahead, fill, polarity, timezone, or sizing bug can manufacture the result and bias later review. |
-| “The study already showed the edge.” | Ungated study output can contain the same causal bug and cannot rebut the cold code review. |
+| “The study already showed the edge.” | Ungated study output can contain the same causal bug and cannot rebut the independent code review. |
 | “Claude always finds something.” | Triage findings; require blocking findings to reach zero, not the report to become empty. |
 | “Loop until Claude emits nothing.” | Log residuals. Escalate if the blocking set stops shrinking. |
 | “Implement every Claude comment to be safe.” | Blind implementation breaks working code and prevents convergence. |
-| “Self-review or per-task review makes Claude redundant.” | Those reviews share implementation context; the Claude gate is the independent adversary. |
+| “Self-review makes Claude redundant.” | Reviews sharing the implementer's reasoning are not independent; the external Claude session is the adversary. |
 | “The plan is obvious.” | At least one planning gate clears before code. |
 | “The deadline requires skipping steps.” | Time pressure does not waive the gates that catch expensive defects. |
 
