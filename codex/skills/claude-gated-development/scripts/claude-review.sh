@@ -152,26 +152,74 @@ Return:
 4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
 
 If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
+
+This conversation may include earlier review gates from the same task. Use that context for continuity, but treat this invocation's review bundle and repository files as authoritative.
 EOF
 
 cd "$repo_root"
 before_fingerprint="$(repo_fingerprint)"
 
-set +e
-"$claude_bin" "$prompt" \
-  --print \
-  --permission-mode dontAsk \
-  --effort max \
-  --no-session-persistence \
-  --output-format text \
-  --add-dir "$review_tmp" \
-  --tools 'Read,Glob,Grep,Skill,Agent' \
-  --allowedTools 'Read,Glob,Grep,Skill,Agent' \
-  --strict-mcp-config \
-  --mcp-config '{"mcpServers":{}}' \
-  --settings '{"disableAllHooks":true,"disableSkillShellExecution":true}' \
+claude_args=(
+  "$prompt"
+  --print
+  --permission-mode dontAsk
+  --effort max
+  --output-format text
+  --add-dir "$review_tmp"
+  --tools 'Read,Glob,Grep,Skill,Agent'
+  --allowedTools 'Read,Glob,Grep,Skill,Agent'
+  --strict-mcp-config
+  --mcp-config '{"mcpServers":{}}'
+  --settings '{"disableAllHooks":true,"disableSkillShellExecution":true}'
   --disallowedTools 'Skill(codex-gated-development)' 'Bash' 'Write' 'Edit' 'NotebookEdit' 'EnterPlanMode' 'ExitPlanMode'
-claude_status=$?
+)
+
+run_claude() {
+  "$claude_bin" "${claude_args[@]}" "$@"
+}
+
+session_key="${CLAUDE_REVIEW_SESSION_KEY:-${CODEX_THREAD_ID:-}}"
+session_file=""
+session_id=""
+if [[ -n "$session_key" ]]; then
+  git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
+  session_dir="$git_common_dir/claude-review-sessions"
+  umask 077
+  mkdir -p "$session_dir"
+  session_hash="$(printf '%s\0%s' "$repo_root" "$session_key" | git hash-object --stdin)"
+  session_file="$session_dir/$session_hash"
+  if [[ -s "$session_file" ]]; then
+    IFS= read -r session_id < "$session_file" || true
+  fi
+fi
+
+set +e
+if [[ -z "$session_file" ]]; then
+  run_claude --no-session-persistence
+  claude_status=$?
+else
+  if [[ -n "$session_id" ]]; then
+    run_claude --resume "$session_id"
+    claude_status=$?
+  else
+    claude_status=1
+  fi
+
+  if [[ "$claude_status" -ne 0 ]]; then
+    [[ -z "$session_id" ]] || printf 'Warning: Claude session %s could not be resumed; starting a new session\n' "$session_id" >&2
+    session_seed="$(printf '%s\0%s' "$session_hash" "$review_tmp" | git hash-object --stdin)"
+    session_id="${session_seed:0:8}-${session_seed:8:4}-4${session_seed:13:3}-8${session_seed:17:3}-${session_seed:20:12}"
+    run_claude --session-id "$session_id"
+    claude_status=$?
+    if [[ "$claude_status" -eq 0 ]]; then
+      # ponytail: direct write is enough because a corrupt ID self-heals via the retry above; add locking if reviews become concurrent.
+      if ! printf '%s\n' "$session_id" > "$session_file"; then
+        printf 'Error: could not save Claude session state at %s\n' "$session_file" >&2
+        claude_status=5
+      fi
+    fi
+  fi
+fi
 set -e
 
 after_fingerprint="$(repo_fingerprint)"
