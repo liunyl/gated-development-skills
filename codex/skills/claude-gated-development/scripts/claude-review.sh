@@ -55,6 +55,9 @@ done
 
 command -v git >/dev/null 2>&1 || die_usage "git is not installed"
 claude_bin="$(command -v claude 2>/dev/null)" || die_usage "claude CLI is not installed"
+kimi_bin="$(command -v kimi 2>/dev/null || true)"
+[[ -n "$kimi_bin" ]] || kimi_bin="${HOME:-}/.kimi-code/bin/kimi"
+[[ -x "$kimi_bin" ]] || die_usage "kimi CLI is not installed"
 if [[ "$claude_bin" == /* ]]; then
   export PATH="$(dirname "$claude_bin"):$PATH"
 fi
@@ -181,6 +184,9 @@ run_claude() {
 session_key="${CLAUDE_REVIEW_SESSION_KEY:-${CODEX_THREAD_ID:-}}"
 session_file=""
 session_id=""
+git_common_dir=""
+kimi_workspace="$review_tmp/kimi-workspace"
+kimi_state_file=""
 if [[ -n "$session_key" ]]; then
   git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
   session_dir="$git_common_dir/claude-review-sessions"
@@ -191,13 +197,31 @@ if [[ -n "$session_key" ]]; then
   if [[ -s "$session_file" ]]; then
     IFS= read -r session_id < "$session_file" || true
   fi
+
+  kimi_workspace_dir="$git_common_dir/kimi-review-workspaces"
+  mkdir -p "$kimi_workspace_dir"
+  kimi_workspace="$kimi_workspace_dir/$session_hash"
+  kimi_state_file="$kimi_workspace/.successful-review"
 fi
 
-set +e
-if [[ -z "$session_file" ]]; then
-  run_claude --no-session-persistence
-  claude_status=$?
-else
+prepare_kimi_workspace() {
+  rm -rf "$kimi_workspace/repo"
+  mkdir -p "$kimi_workspace/repo"
+  while IFS= read -r -d '' path; do
+    [[ -e "$repo_root/$path" || -L "$repo_root/$path" ]] || continue
+    mkdir -p "$kimi_workspace/repo/$(dirname "$path")"
+    cp -p -- "$repo_root/$path" "$kimi_workspace/repo/$path"
+  done < <(git -C "$repo_root" ls-files --cached --others --exclude-standard -z)
+  cp "$review_bundle" "$kimi_workspace/review-scope.txt"
+}
+
+run_claude_review() {
+  local claude_status
+  if [[ -z "$session_file" ]]; then
+    run_claude --no-session-persistence
+    return $?
+  fi
+
   if [[ -n "$session_id" ]]; then
     run_claude --resume "$session_id"
     claude_status=$?
@@ -219,13 +243,54 @@ else
       fi
     fi
   fi
-fi
+
+  return "$claude_status"
+}
+
+run_kimi_review() {
+  local -a kimi_args=(-p "$kimi_prompt")
+  if [[ -n "$kimi_state_file" && -s "$kimi_state_file" ]]; then
+    kimi_args=(--continue "${kimi_args[@]}")
+  fi
+  (
+    cd "$kimi_workspace"
+    "$kimi_bin" "${kimi_args[@]}"
+  )
+  local kimi_status=$?
+  if [[ "$kimi_status" -eq 0 && -n "$kimi_state_file" ]]; then
+    printf 'success\n' > "$kimi_state_file"
+  fi
+  return "$kimi_status"
+}
+
+prepare_kimi_workspace
+kimi_prompt="${prompt/$review_bundle/$kimi_workspace/review-scope.txt}"
+claude_report="$review_tmp/claude-report.txt"
+kimi_report="$review_tmp/kimi-report.txt"
+
+set +e
+run_claude_review > "$claude_report" 2>&1 &
+claude_pid=$!
+run_kimi_review > "$kimi_report" 2>&1 &
+kimi_pid=$!
+wait "$claude_pid"
+claude_status=$?
+wait "$kimi_pid"
+kimi_status=$?
 set -e
+
+printf '=== Claude review ===\n'
+cat "$claude_report"
+printf '=== Kimi review ===\n'
+cat "$kimi_report"
 
 after_fingerprint="$(repo_fingerprint)"
 if [[ "$before_fingerprint" != "$after_fingerprint" ]]; then
-  printf 'Error: repository state changed during Claude review; gate failed\n' >&2
+  printf 'Error: repository state changed during reviewer execution; gate failed\n' >&2
   exit 4
 fi
 
-exit "$claude_status"
+if [[ "$claude_status" -ne 0 ]]; then
+  exit "$claude_status"
+fi
+exit "$kimi_status"
