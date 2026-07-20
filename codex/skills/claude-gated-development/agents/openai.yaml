@@ -1,4 +1,4 @@
 interface:
-  display_name: "Claude-Gated Development"
-  short_description: "Gate engineering work with independent Claude reviews"
-  default_prompt: "Use $claude-gated-development to execute this task with independent Claude review gates."
+  display_name: "Complexity-Routed Claude + Kimi Review"
+  short_description: "Skip simple work; dual-review concrete complex or high-risk work"
+  default_prompt: "Use $claude-gated-development to route this task: skip external review unless a concrete complexity or high-risk trigger requires concurrent Claude + Kimi gates."
