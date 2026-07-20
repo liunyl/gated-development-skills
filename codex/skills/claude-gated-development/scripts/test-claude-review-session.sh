@@ -13,6 +13,11 @@ fail() {
 
 cat > "$tmp/bin/claude" <<'EOF'
 #!/usr/bin/env bash
+if [[ -t 0 || -p /dev/stdin ]]; then
+  printf 'fake claude: stdin must be pinned to /dev/null\n' >&2
+  exit 97
+fi
+[[ -z "${MUTATE_FILE:-}" ]] || chmod 400 "$MUTATE_FILE"
 : > "$CLAUDE_STARTED"
 for _ in {1..100}; do
   [[ -e "$KIMI_STARTED" ]] && break
@@ -31,11 +36,16 @@ if [[ -n "${FAIL_RESUME_MARKER:-}" && ! -e "$FAIL_RESUME_MARKER" ]]; then
     fi
   done
 fi
+[[ -n "${NO_LAST_MESSAGE:-}" ]] || printf 'fake claude verdict\n'
 EOF
 chmod +x "$tmp/bin/claude"
 
 cat > "$tmp/home/.kimi-code/bin/kimi" <<'EOF'
 #!/usr/bin/env bash
+if [[ -t 0 || -p /dev/stdin ]]; then
+  printf 'fake kimi: stdin must be pinned to /dev/null\n' >&2
+  exit 97
+fi
 : > "$KIMI_STARTED"
 for _ in {1..100}; do
   [[ -e "$CLAUDE_STARTED" ]] && break
@@ -75,6 +85,7 @@ printf 'CALL\tcwd=%q' "$PWD" >> "$KIMI_LOG"
 printf '\t%q' "$@" >> "$KIMI_LOG"
 printf '\n' >> "$KIMI_LOG"
 [[ -z "${FAIL_KIMI:-}" ]] || exit 9
+[[ -n "${NO_KIMI_LAST_MESSAGE:-}" ]] || printf 'fake kimi verdict\n'
 EOF
 chmod +x "$tmp/home/.kimi-code/bin/kimi"
 
@@ -253,5 +264,41 @@ if (cd "$repo_c" && run_review "$repo_c" cannot-save); then
   fail 'session-state write failure did not fail the gate'
 fi
 chmod 700 "$readonly_state_dir"
+
+rm -f "$tmp/claude.started" "$tmp/kimi.started"
+(cd "$repo_a" && env -u CODEX_THREAD_ID CLAUDE_REVIEW_SESSION_KEY=env-loser \
+  HOME="$tmp/home" PATH="$tmp/bin:$PATH" \
+  CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
+  RELATIVE_KIMI_MARKER="$tmp/relative-kimi.started" \
+  LIVE_REPO="$(git -C "$repo_a" rev-parse --show-toplevel)" \
+  CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started" \
+  "$runner" adversarial --focus test --session-key arg-winner >/dev/null 2>>"$tmp/review.stderr")
+arg_state="$(printf '%s\0%s' "$repo_a_root" 'arg-winner' | git -C "$repo_a" hash-object --stdin)"
+env_state="$(printf '%s\0%s' "$repo_a_root" 'env-loser' | git -C "$repo_a" hash-object --stdin)"
+[[ -f "$state_dir/$arg_state" ]] || fail '--session-key did not create its own session state'
+[[ ! -e "$state_dir/$env_state" ]] || fail '--session-key did not override CLAUDE_REVIEW_SESSION_KEY'
+
+(cd "$repo_a" && (sleep 5) | run_review "$repo_a" stdin-detach) \
+  || fail 'review with piped stdin did not detach stdin'
+
+if (cd "$repo_a" && NO_LAST_MESSAGE=1 run_review "$repo_a" no-claude-report); then
+  unset NO_LAST_MESSAGE
+  fail 'empty Claude report did not fail the gate'
+fi
+unset NO_LAST_MESSAGE
+
+if (cd "$repo_a" && NO_KIMI_LAST_MESSAGE=1 run_review "$repo_a" no-kimi-report); then
+  unset NO_KIMI_LAST_MESSAGE
+  fail 'empty Kimi report did not fail the gate'
+fi
+unset NO_KIMI_LAST_MESSAGE
+
+mut_target="$repo_a/untracked-mode.txt"
+printf 'x\n' > "$mut_target"
+if (cd "$repo_a" && MUTATE_FILE="$mut_target" run_review "$repo_a" mode-mutation); then
+  unset MUTATE_FILE
+  fail 'mode-only mutation of an untracked file did not fail the gate'
+fi
+unset MUTATE_FILE
 
 printf 'parallel Claude and Kimi review checks passed\n'

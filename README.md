@@ -1,6 +1,6 @@
 # gated-development-skills
 
-Two mirror-named gate skills for Claude Code and Codex CLI. The Codex-side
+Gate skills for Claude Code, Codex CLI, and Kimi Code. The Codex-side
 `claude-gated-development` skill is complexity-routed: local, reversible,
 single-path work with a direct check skips external review, while concrete
 complex or high-risk work uses concurrent independent Claude + Kimi planning
@@ -11,6 +11,7 @@ run.
 |-------|----------|---------|
 | `codex-gated-development` | Claude Code — `~/.claude/skills/` | Claude side: gate before Claude starts real work |
 | `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: route complex/high-risk work through Claude + Kimi review |
+| `kimi-gated-development` | Kimi Code — `~/.agents/skills/` | Kimi side: judgment-triggered dual gate — Claude and Codex review in parallel, each reusing one persistent session per task across all review rounds |
 
 ## Install on a new machine
 
@@ -18,12 +19,18 @@ run.
 git clone git@github.com:liunyl/gated-development-skills.git
 cd gated-development-skills
 
-mkdir -p ~/.claude/skills ~/.codex/skills
+mkdir -p ~/.claude/skills ~/.codex/skills ~/.agents/skills
 cp -R claude/skills/codex-gated-development ~/.claude/skills/
 cp -R codex/skills/claude-gated-development ~/.codex/skills/
+cp -R kimi/skills/kimi-gated-development ~/.agents/skills/
 ```
 
 That's it — each tool auto-discovers skills under its `skills/` dir.
+
+`kimi-gated-development` needs both the `claude` and `codex` CLIs installed
+and authenticated; its reviewers are review-only (read-only tool surface /
+sandbox) and keep one session per task per reviewer, so later rounds resume
+instead of reloading context.
 
 ## Install Codex plugin adapters
 
