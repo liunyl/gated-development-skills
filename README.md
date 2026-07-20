@@ -1,12 +1,16 @@
 # gated-development-skills
 
-Two mirror-named gate skills that force a planning/verification workflow before
-any non-trivial implementation or backtest work.
+Two mirror-named gate skills for Claude Code and Codex CLI. The Codex-side
+`claude-gated-development` skill is complexity-routed: local, reversible,
+single-path work with a direct check skips external review, while concrete
+complex or high-risk work uses concurrent independent Claude + Kimi planning
+and final reviews. Its real quant backtests remain gated before their first
+run.
 
 | Skill | Lives in | Purpose |
 |-------|----------|---------|
 | `codex-gated-development` | Claude Code — `~/.claude/skills/` | Claude side: gate before Claude starts real work |
-| `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: gate before Codex starts real work |
+| `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: route complex/high-risk work through Claude + Kimi review |
 
 ## Install on a new machine
 

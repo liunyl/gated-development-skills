@@ -55,11 +55,30 @@ done
 
 command -v git >/dev/null 2>&1 || die_usage "git is not installed"
 claude_bin="$(command -v claude 2>/dev/null)" || die_usage "claude CLI is not installed"
+kimi_bin="$(command -v kimi 2>/dev/null || true)"
+[[ -n "$kimi_bin" ]] || kimi_bin="${HOME:-}/.kimi-code/bin/kimi"
+if [[ "$kimi_bin" != /* ]]; then
+  kimi_bin="$(cd "$(dirname "$kimi_bin")" && pwd -P)/$(basename "$kimi_bin")"
+fi
+[[ -x "$kimi_bin" ]] || die_usage "kimi CLI is not installed"
+sandbox_bin="/usr/bin/sandbox-exec"
+if [[ ! -x "$sandbox_bin" ]]; then
+  sandbox_bin="$(command -v sandbox-exec 2>/dev/null || true)"
+  if [[ -n "$sandbox_bin" && "$sandbox_bin" != /* ]]; then
+    sandbox_bin="$(cd "$(dirname "$sandbox_bin")" && pwd -P)/$(basename "$sandbox_bin")"
+  fi
+fi
+[[ -x "$sandbox_bin" ]] || die_usage "native sandbox-exec is required for Kimi review"
 if [[ "$claude_bin" == /* ]]; then
   export PATH="$(dirname "$claude_bin"):$PATH"
 fi
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die_usage "run inside a git repository"
+repo_root="$(cd "$repo_root" && pwd -P)"
+git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
+git_common_dir="$(cd "$git_common_dir" && pwd -P)"
+git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-dir)"
+git_dir="$(cd "$git_dir" && pwd -P)"
 status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)"
 
 if [[ -n "$base" ]]; then
@@ -92,6 +111,25 @@ fi
 review_tmp="$(mktemp -d "${TMPDIR:-/tmp}/claude-review.XXXXXX")" || die_usage "cannot create temporary review directory"
 trap 'rm -rf "$review_tmp"' EXIT
 review_bundle="$review_tmp/review-scope.txt"
+sandbox_profile="$review_tmp/kimi.sb"
+
+sandbox_path() {
+  local value="$1"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die_usage "repository path cannot contain newlines"
+  value="${value//\\/\\\\}"
+  printf '%s' "${value//\"/\\\"}"
+}
+
+sandbox_repo="$(sandbox_path "$repo_root")"
+sandbox_common="$(sandbox_path "$git_common_dir")"
+sandbox_git="$(sandbox_path "$git_dir")"
+{
+  printf '(version 1)\n'
+  printf '(allow default)\n'
+  printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_repo"
+  printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_common"
+  printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_git"
+} > "$sandbox_profile"
 
 {
   printf 'Repository: %s\n' "$repo_root"
@@ -181,8 +219,9 @@ run_claude() {
 session_key="${CLAUDE_REVIEW_SESSION_KEY:-${CODEX_THREAD_ID:-}}"
 session_file=""
 session_id=""
+kimi_workspace="$review_tmp/kimi-workspace"
+kimi_state_file=""
 if [[ -n "$session_key" ]]; then
-  git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
   session_dir="$git_common_dir/claude-review-sessions"
   umask 077
   mkdir -p "$session_dir"
@@ -191,13 +230,46 @@ if [[ -n "$session_key" ]]; then
   if [[ -s "$session_file" ]]; then
     IFS= read -r session_id < "$session_file" || true
   fi
+
+  kimi_workspace_dir="${XDG_CACHE_HOME:-${HOME:-}/.cache}/claude-gated-development/kimi-review-workspaces"
+  mkdir -p "$kimi_workspace_dir"
+  kimi_workspace="$kimi_workspace_dir/$session_hash"
+  mkdir -p "$kimi_workspace"
+  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
+  kimi_state_file="$kimi_workspace/.successful-review"
 fi
 
-set +e
-if [[ -z "$session_file" ]]; then
-  run_claude --no-session-persistence
-  claude_status=$?
-else
+prepare_kimi_workspace() {
+  local line kimi_repo
+  mkdir -p "$kimi_workspace"
+  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
+  kimi_repo="$kimi_workspace/repo"
+  rm -rf "$kimi_workspace/repo"
+  mkdir -p "$kimi_workspace/repo"
+  while IFS= read -r -d '' path; do
+    [[ -e "$repo_root/$path" || -L "$repo_root/$path" ]] || continue
+    mkdir -p "$kimi_workspace/repo/$(dirname "$path")"
+    if [[ -L "$repo_root/$path" ]]; then
+      printf 'symlink\n' > "$kimi_workspace/repo/$path"
+    elif [[ -d "$repo_root/$path" ]]; then
+      mkdir -p "$kimi_workspace/repo/$path"
+      printf 'gitlink\n' > "$kimi_workspace/repo/$path/.gitlink"
+    else
+      cp -p -- "$repo_root/$path" "$kimi_workspace/repo/$path"
+    fi
+  done < <(git -C "$repo_root" ls-files --cached --others --exclude-standard -z)
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s\n' "${line//$repo_root/$kimi_repo}"
+  done < "$review_bundle" > "$kimi_workspace/review-scope.txt"
+}
+
+run_claude_review() {
+  local claude_status
+  if [[ -z "$session_file" ]]; then
+    run_claude --no-session-persistence
+    return $?
+  fi
+
   if [[ -n "$session_id" ]]; then
     run_claude --resume "$session_id"
     claude_status=$?
@@ -219,13 +291,86 @@ else
       fi
     fi
   fi
-fi
+
+  return "$claude_status"
+}
+
+run_kimi_review() {
+  local -a kimi_args=(-p "$kimi_prompt")
+  local -a kimi_env=(env -u OLDPWD)
+  local name
+  if [[ -n "$kimi_state_file" && -s "$kimi_state_file" ]]; then
+    kimi_args=(--continue "${kimi_args[@]}")
+  fi
+  while IFS= read -r name; do
+    [[ "$name" == GIT_* ]] && kimi_env+=(-u "$name")
+  done < <(compgen -e)
+  (
+    cd "$kimi_workspace"
+    "${kimi_env[@]}" "$sandbox_bin" -f "$sandbox_profile" "$kimi_bin" "${kimi_args[@]}"
+  )
+  local kimi_status=$?
+  if [[ "$kimi_status" -eq 0 && -n "$kimi_state_file" ]]; then
+    if ! printf 'success\n' > "$kimi_state_file"; then
+      printf 'Error: could not save Kimi session state at %s\n' "$kimi_state_file" >&2
+      return 5
+    fi
+  fi
+  return "$kimi_status"
+}
+
+prepare_kimi_workspace
+kimi_repo="$kimi_workspace/repo"
+kimi_scope="${scope//$repo_root/$kimi_repo}"
+kimi_focus="${focus//$repo_root/$kimi_repo}"
+IFS= read -r -d '' kimi_prompt <<EOF || true
+You are the independent external reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state.
+
+Repository snapshot: $kimi_repo
+Review mode: $mode
+Scope contract: $kimi_scope
+Precomputed review bundle: $kimi_workspace/review-scope.txt
+Review focus: $kimi_focus
+Review lens: $lens
+
+Read the precomputed review bundle first, then inspect applicable CLAUDE.md and AGENTS.md guidance and the named repository snapshot files. Verify that the review scope is non-empty and contains the artifact's actual substance; do not rely on a prompt summary when the code or document is available.
+
+Return:
+1. Scope examined: exact refs, diffs, and files reviewed.
+2. Blocking findings: only valid correctness, security, look-ahead, sizing, spec-violation, or other material defects. Give priority, file:line, evidence, impact, and the smallest sound remedy.
+3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
+4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
+
+If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
+
+This conversation may include earlier review gates from the same task. Use that context for continuity, but treat this invocation's review bundle and repository snapshot files as authoritative.
+EOF
+claude_report="$review_tmp/claude-report.txt"
+kimi_report="$review_tmp/kimi-report.txt"
+
+set +e
+run_claude_review > "$claude_report" 2>&1 &
+claude_pid=$!
+run_kimi_review > "$kimi_report" 2>&1 &
+kimi_pid=$!
+wait "$claude_pid"
+claude_status=$?
+wait "$kimi_pid"
+kimi_status=$?
 set -e
+
+printf '=== Claude review ===\n'
+cat "$claude_report"
+printf '=== Kimi review ===\n'
+cat "$kimi_report"
 
 after_fingerprint="$(repo_fingerprint)"
 if [[ "$before_fingerprint" != "$after_fingerprint" ]]; then
-  printf 'Error: repository state changed during Claude review; gate failed\n' >&2
+  printf 'Error: repository state changed during reviewer execution; gate failed\n' >&2
   exit 4
 fi
 
-exit "$claude_status"
+if [[ "$claude_status" -ne 0 ]]; then
+  exit "$claude_status"
+fi
+exit "$kimi_status"
