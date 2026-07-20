@@ -1,9 +1,11 @@
 # gated-development-skills
 
-Two mirror-named complexity-routed review skills. Local, reversible,
-single-path work with a direct check skips external review; concrete complex or
-high-risk work uses concurrent independent Claude + Kimi planning and final
-reviews. Real quant backtests remain gated before their first run.
+Two mirror-named gate skills for Claude Code and Codex CLI. The Codex-side
+`claude-gated-development` skill is complexity-routed: local, reversible,
+single-path work with a direct check skips external review, while concrete
+complex or high-risk work uses concurrent independent Claude + Kimi planning
+and final reviews. Its real quant backtests remain gated before their first
+run.
 
 | Skill | Lives in | Purpose |
 |-------|----------|---------|
