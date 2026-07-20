@@ -16,6 +16,8 @@ Use two modes:
 - **Complex engineering:** plan → concurrent Claude + Kimi gate → implement → verify → concurrent Claude + Kimi gate.
 - **Quant backtest:** study → playbook + code → concurrent Claude + Kimi gate → first real run.
 
+**Codex CLI only.** This skill's reviewers are Claude and Kimi — it is Codex's gate, not an orchestrator for other agents. It must never be adopted by Kimi Code, Claude Code, or any other agent; it installs to Codex's private `~/.codex/skills/`, which they do not scan.
+
 ## Reviewer command
 
 Run from the repository root:
