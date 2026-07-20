@@ -43,6 +43,12 @@ for _ in {1..100}; do
 done
 [[ -e "$CLAUDE_STARTED" ]] || exit 8
 [[ -f "$PWD/repo/tracked.txt" && -f "$PWD/review-scope.txt" ]] || exit 7
+if grep -Fq -- "$LIVE_REPO" "$PWD/review-scope.txt"; then
+  exit 12
+fi
+if ! grep -Fqx -- "Repository: $PWD/repo" "$PWD/review-scope.txt"; then
+  exit 13
+fi
 for arg in "$@"; do
   [[ "$arg" != *"$LIVE_REPO"* ]] || exit 10
 done

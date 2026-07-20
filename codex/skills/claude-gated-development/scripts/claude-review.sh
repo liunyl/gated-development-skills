@@ -207,6 +207,10 @@ if [[ -n "$session_key" ]]; then
 fi
 
 prepare_kimi_workspace() {
+  local line kimi_repo
+  mkdir -p "$kimi_workspace"
+  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
+  kimi_repo="$kimi_workspace/repo"
   rm -rf "$kimi_workspace/repo"
   mkdir -p "$kimi_workspace/repo"
   while IFS= read -r -d '' path; do
@@ -214,7 +218,9 @@ prepare_kimi_workspace() {
     mkdir -p "$kimi_workspace/repo/$(dirname "$path")"
     cp -p -- "$repo_root/$path" "$kimi_workspace/repo/$path"
   done < <(git -C "$repo_root" ls-files --cached --others --exclude-standard -z)
-  cp "$review_bundle" "$kimi_workspace/review-scope.txt"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s\n' "${line//$repo_root/$kimi_repo}"
+  done < "$review_bundle" > "$kimi_workspace/review-scope.txt"
 }
 
 run_claude_review() {
@@ -266,7 +272,6 @@ run_kimi_review() {
 }
 
 prepare_kimi_workspace
-kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
 kimi_repo="$kimi_workspace/repo"
 kimi_scope="${scope//$repo_root/$kimi_repo}"
 kimi_focus="${focus//$repo_root/$kimi_repo}"
