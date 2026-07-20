@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Single-reviewer variant for kimi-gated-development.
+# Origin: codex/skills/claude-gated-development/scripts/claude-review.sh
+# Intentionally diverged: upstream runs a dual Claude+Kimi review for Codex
+# orchestration; Kimi orchestration needs the Claude reviewer only (Codex is
+# the second reviewer via codex-review.sh). Not kept byte-identical with
+# upstream; port fixes manually when they touch the shared ancestry.
 set -euo pipefail
 # Everything this wrapper writes (session state, review bundle, captured
 # output) is private to the user; children inherit the restrictive mask.

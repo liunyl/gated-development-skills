@@ -115,8 +115,8 @@ run_review() {
   local -a review_env
   live_repo="$(git -C "$repo" rev-parse --show-toplevel)"
   live_git="$(git -C "$repo" rev-parse --path-format=absolute --git-dir)"
-  review_path="$tmp/bin:$PATH"
-  [[ "$probe" == "relative-path" ]] && review_path="$tmp/bin:../relative-bin:$PATH"
+  review_path="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  [[ "$probe" == "relative-path" ]] && review_path="$tmp/bin:../relative-bin:/usr/bin:/bin:/usr/sbin:/sbin"
   review_env=(
     HOME="$tmp/home" PATH="$review_path"
     CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log"
@@ -267,7 +267,7 @@ chmod 700 "$readonly_state_dir"
 
 rm -f "$tmp/claude.started" "$tmp/kimi.started"
 (cd "$repo_a" && env -u CODEX_THREAD_ID CLAUDE_REVIEW_SESSION_KEY=env-loser \
-  HOME="$tmp/home" PATH="$tmp/bin:$PATH" \
+  HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
   CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
   RELATIVE_KIMI_MARKER="$tmp/relative-kimi.started" \
   LIVE_REPO="$(git -C "$repo_a" rev-parse --show-toplevel)" \
