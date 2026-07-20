@@ -198,9 +198,11 @@ if [[ -n "$session_key" ]]; then
     IFS= read -r session_id < "$session_file" || true
   fi
 
-  kimi_workspace_dir="$git_common_dir/kimi-review-workspaces"
+  kimi_workspace_dir="${XDG_CACHE_HOME:-${HOME:-}/.cache}/claude-gated-development/kimi-review-workspaces"
   mkdir -p "$kimi_workspace_dir"
   kimi_workspace="$kimi_workspace_dir/$session_hash"
+  mkdir -p "$kimi_workspace"
+  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
   kimi_state_file="$kimi_workspace/.successful-review"
 fi
 
@@ -264,7 +266,32 @@ run_kimi_review() {
 }
 
 prepare_kimi_workspace
-kimi_prompt="${prompt/$review_bundle/$kimi_workspace/review-scope.txt}"
+kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
+kimi_repo="$kimi_workspace/repo"
+kimi_scope="${scope//$repo_root/$kimi_repo}"
+kimi_focus="${focus//$repo_root/$kimi_repo}"
+IFS= read -r -d '' kimi_prompt <<EOF || true
+You are the independent external reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state.
+
+Repository snapshot: $kimi_repo
+Review mode: $mode
+Scope contract: $kimi_scope
+Precomputed review bundle: $kimi_workspace/review-scope.txt
+Review focus: $kimi_focus
+Review lens: $lens
+
+Read the precomputed review bundle first, then inspect applicable CLAUDE.md and AGENTS.md guidance and the named repository snapshot files. Verify that the review scope is non-empty and contains the artifact's actual substance; do not rely on a prompt summary when the code or document is available.
+
+Return:
+1. Scope examined: exact refs, diffs, and files reviewed.
+2. Blocking findings: only valid correctness, security, look-ahead, sizing, spec-violation, or other material defects. Give priority, file:line, evidence, impact, and the smallest sound remedy.
+3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
+4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
+
+If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
+
+This conversation may include earlier review gates from the same task. Use that context for continuity, but treat this invocation's review bundle and repository snapshot files as authoritative.
+EOF
 claude_report="$review_tmp/claude-report.txt"
 kimi_report="$review_tmp/kimi-report.txt"
 

@@ -43,6 +43,10 @@ for _ in {1..100}; do
 done
 [[ -e "$CLAUDE_STARTED" ]] || exit 8
 [[ -f "$PWD/repo/tracked.txt" && -f "$PWD/review-scope.txt" ]] || exit 7
+for arg in "$@"; do
+  [[ "$arg" != *"$LIVE_REPO"* ]] || exit 10
+done
+[[ "$*" == *"$PWD/repo"* ]] || exit 11
 printf 'CALL\tcwd=%q' "$PWD" >> "$KIMI_LOG"
 printf '\t%q' "$@" >> "$KIMI_LOG"
 printf '\n' >> "$KIMI_LOG"
@@ -63,17 +67,21 @@ make_repo() {
 
 run_review() {
   local repo="$1" task_key="$2"
+  local live_repo
+  live_repo="$(git -C "$repo" rev-parse --show-toplevel)"
   rm -f "$tmp/claude.started" "$tmp/kimi.started"
   if [[ -n "$task_key" ]]; then
     env -u CLAUDE_REVIEW_SESSION_KEY CODEX_THREAD_ID="$task_key" \
       HOME="$tmp/home" PATH="$tmp/bin:$PATH" \
       CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
+      LIVE_REPO="$live_repo" \
       CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started" \
       "$runner" adversarial --focus test >/dev/null 2>>"$tmp/review.stderr"
   else
     env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
       HOME="$tmp/home" PATH="$tmp/bin:$PATH" \
       CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
+      LIVE_REPO="$live_repo" \
       CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started" \
       "$runner" adversarial --focus test >/dev/null 2>>"$tmp/review.stderr"
   fi
