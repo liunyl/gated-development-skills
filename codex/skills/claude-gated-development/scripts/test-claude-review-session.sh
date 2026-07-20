@@ -4,7 +4,7 @@ set -euo pipefail
 runner="$(cd "$(dirname "$0")" && pwd)/claude-review.sh"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/claude-review-test.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/home/.kimi-code/bin"
+mkdir -p "$tmp/bin" "$tmp/home/.kimi-code/bin" "$tmp/relative-bin"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -49,6 +49,24 @@ fi
 if ! grep -Fqx -- "Repository: $PWD/repo" "$PWD/review-scope.txt"; then
   exit 13
 fi
+if [[ -n "${EXPECT_SNAPSHOT_TYPES:-}" ]]; then
+  [[ -f "$PWD/repo/external-link" && ! -L "$PWD/repo/external-link" ]] || exit 19
+  grep -Fqx -- 'symlink' "$PWD/repo/external-link" || exit 20
+  if grep -Fq -- 'external secret content' "$PWD/repo/external-link"; then
+    exit 21
+  fi
+  [[ -f "$PWD/repo/submodule/.gitlink" ]] || exit 22
+  [[ ! -e "$PWD/repo/submodule/inside.txt" ]] || exit 23
+fi
+if [[ -n "${PROBE_SANDBOX:-}" ]]; then
+  sandbox_failed=0
+  /bin/cat "$LIVE_IGNORED" >/dev/null 2>&1 && sandbox_failed=1
+  /bin/cat "$LIVE_GIT_FILE" >/dev/null 2>&1 && sandbox_failed=1
+  /usr/bin/touch "$LIVE_WRITE" >/dev/null 2>&1 && sandbox_failed=1
+  /usr/bin/touch "$LIVE_GIT_WRITE" >/dev/null 2>&1 && sandbox_failed=1
+  [[ -z "${OLDPWD:-}${GIT_DIR:-}${GIT_WORK_TREE:-}" ]] || sandbox_failed=1
+  [[ "$sandbox_failed" -eq 0 ]] || exit 14
+fi
 for arg in "$@"; do
   [[ "$arg" != *"$LIVE_REPO"* ]] || exit 10
 done
@@ -60,35 +78,64 @@ printf '\n' >> "$KIMI_LOG"
 EOF
 chmod +x "$tmp/home/.kimi-code/bin/kimi"
 
+cat > "$tmp/relative-bin/kimi" <<'EOF'
+#!/usr/bin/env bash
+: > "$RELATIVE_KIMI_MARKER"
+exec "$HOME/.kimi-code/bin/kimi" "$@"
+EOF
+chmod +x "$tmp/relative-bin/kimi"
+
 make_repo() {
   local path="$1"
   git init -q "$path"
   git -C "$path" config user.name Test
   git -C "$path" config user.email test@example.com
+  printf '.ignored-secret\n.sandbox-write\n' > "$path/.gitignore"
+  printf 'ignored live secret\n' > "$path/.ignored-secret"
   printf 'before\n' > "$path/tracked.txt"
-  git -C "$path" add tracked.txt
+  git -C "$path" add .gitignore tracked.txt
   git -C "$path" commit -qm baseline
   printf 'after\n' >> "$path/tracked.txt"
 }
 
 run_review() {
-  local repo="$1" task_key="$2"
-  local live_repo
+  local repo="$1" task_key="$2" probe="${3:-}"
+  local live_repo live_git review_path
+  local -a review_env
   live_repo="$(git -C "$repo" rev-parse --show-toplevel)"
+  live_git="$(git -C "$repo" rev-parse --path-format=absolute --git-dir)"
+  review_path="$tmp/bin:$PATH"
+  [[ "$probe" == "relative-path" ]] && review_path="$tmp/bin:../relative-bin:$PATH"
+  review_env=(
+    HOME="$tmp/home" PATH="$review_path"
+    CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log"
+    RELATIVE_KIMI_MARKER="$tmp/relative-kimi.started"
+    LIVE_REPO="$live_repo"
+    CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started"
+  )
+  if [[ -L "$repo/external-link" && -d "$repo/submodule" ]]; then
+    review_env+=(EXPECT_SNAPSHOT_TYPES=1)
+  fi
+  if [[ "$probe" == "sandbox" ]]; then
+    review_env+=(
+      PROBE_SANDBOX=1
+      LIVE_IGNORED="$live_repo/.ignored-secret"
+      LIVE_GIT_FILE="$live_git/HEAD"
+      LIVE_WRITE="$live_repo/.sandbox-write"
+      LIVE_GIT_WRITE="$live_git/sandbox-write"
+      OLDPWD="$live_repo"
+      GIT_DIR="$live_git"
+      GIT_WORK_TREE="$live_repo"
+    )
+  fi
   rm -f "$tmp/claude.started" "$tmp/kimi.started"
   if [[ -n "$task_key" ]]; then
     env -u CLAUDE_REVIEW_SESSION_KEY CODEX_THREAD_ID="$task_key" \
-      HOME="$tmp/home" PATH="$tmp/bin:$PATH" \
-      CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
-      LIVE_REPO="$live_repo" \
-      CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started" \
+      "${review_env[@]}" \
       "$runner" adversarial --focus test >/dev/null 2>>"$tmp/review.stderr"
   else
     env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
-      HOME="$tmp/home" PATH="$tmp/bin:$PATH" \
-      CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
-      LIVE_REPO="$live_repo" \
-      CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started" \
+      "${review_env[@]}" \
       "$runner" adversarial --focus test >/dev/null 2>>"$tmp/review.stderr"
   fi
 }
@@ -107,6 +154,20 @@ repo_c="$tmp/repo-c"
 make_repo "$repo_a"
 make_repo "$repo_b"
 make_repo "$repo_c"
+external_secret="$tmp/external-secret.txt"
+printf 'external secret content\n' > "$external_secret"
+ln -s "$external_secret" "$repo_a/external-link"
+submodule_source="$tmp/submodule-source"
+git init -q "$submodule_source"
+git -C "$submodule_source" config user.name Test
+git -C "$submodule_source" config user.email test@example.com
+printf 'submodule content\n' > "$submodule_source/inside.txt"
+git -C "$submodule_source" add inside.txt
+git -C "$submodule_source" commit -qm baseline
+git -C "$repo_a" -c protocol.file.allow=always submodule add -q "$submodule_source" submodule
+git -C "$repo_a" config -f .gitmodules submodule.submodule.url ../submodule-source
+git -C "$repo_a" add .gitmodules external-link submodule
+git -C "$repo_a" commit -qm 'add snapshot type fixtures'
 : > "$tmp/claude.log"
 : > "$tmp/kimi.log"
 
@@ -158,6 +219,24 @@ last_line="$(tail -n 1 "$tmp/claude.log")"
 [[ "$last_line" == *--no-session-persistence* ]] || fail 'no-task review did not stay non-persistent'
 [[ "$last_line" != *--session-id* && "$last_line" != *--resume* ]] || fail 'no-task review unexpectedly reused a session'
 [[ "$(sed -n '8p' "$tmp/kimi.log")" != *--continue* ]] || fail 'no-task Kimi review unexpectedly reused a session'
+
+(cd "$repo_a" && run_review "$repo_a" sandbox-probe sandbox)
+[[ ! -e "$repo_a/.sandbox-write" ]] || fail 'Kimi wrote an ignored live-worktree file'
+[[ ! -e "$repo_a/.git/sandbox-write" ]] || fail 'Kimi wrote live Git state'
+
+marker_key="marker-write-failure"
+marker_repo="$(git -C "$repo_a" rev-parse --show-toplevel)"
+marker_hash="$(printf '%s\0%s' "$marker_repo" "$marker_key" | git -C "$repo_a" hash-object --stdin)"
+marker_path="$tmp/home/.cache/claude-gated-development/kimi-review-workspaces/$marker_hash/.successful-review"
+mkdir -p "$marker_path"
+if (cd "$repo_a" && run_review "$repo_a" "$marker_key"); then
+  fail 'Kimi marker write failure did not fail the gate'
+fi
+rm -rf "$marker_path"
+
+rm -f "$tmp/relative-kimi.started"
+(cd "$repo_a" && run_review "$repo_a" relative-path relative-path)
+[[ -e "$tmp/relative-kimi.started" ]] || fail 'relative PATH Kimi was not invoked'
 
 FAIL_KIMI=1; export FAIL_KIMI
 if (cd "$repo_a" && run_review "$repo_a" task-a); then
