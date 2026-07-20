@@ -15,6 +15,8 @@ Gate complex engineering work with **two independent external reviewers — Clau
 
 **Judgment-based trigger:** unlike the Claude/Codex mirror skills in this family, gates here are NOT mandatory for every task. You decide — using the observable threshold below, not vibes. When you do gate, the full loop discipline applies.
 
+**Kimi Code only.** This skill orchestrates Claude and Codex as its two reviewers — they are the gate, not the orchestrator. It must never be adopted by Claude, Codex, or any other agent, which is why it installs to Kimi's private skill directory (`~/.kimi-code/skills/`) and never to the shared `~/.agents/skills/`. If you are not Kimi Code, stop here.
+
 ## When to Use
 
 Gate when ANY of these is true:
@@ -33,7 +35,7 @@ Gate when ANY of these is true:
 Two wrapper scripts (installed with this skill) run the reviewers. From the repository root:
 
 ```bash
-SKILL_DIR="${AGENTS_HOME:-$HOME/.agents}/skills/kimi-gated-development"
+SKILL_DIR="${KIMI_CODE_HOME:-$HOME/.kimi-code}/skills/kimi-gated-development"
 
 # Planning / design gate (adversarial: challenges the approach itself)
 "$SKILL_DIR/scripts/claude-review.sh" adversarial --session-key <task-key> --focus "Review the spec/plan at <path>; challenge approach, assumptions, omissions, repo fit."
