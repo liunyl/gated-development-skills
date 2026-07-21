@@ -88,7 +88,8 @@ assert both cases also fall back to full scope. Exercise both split-state cases
 (only Claude state and only Kimi state) with the same expectation. Make the
 fake Kimi print a deterministic `To resume this session: kimi -r session_...`
 hint, assert later rounds use `--session <id>` rather than `--continue`, and
-make an explicit resume failure block the gate without replacing its state.
+make an explicit resume failure block the current gate, clear its saved ID,
+and force the next invocation to use a full fresh Kimi review.
 Use a fake ID with another underscore after `session_` so validation exercises
 the complete supported token class.
 Assert Claude's allowed tool set still includes `Agent`, its denied tools name
@@ -236,6 +237,23 @@ fresh session and exit zero when no workspace history exists. Live probes also
 verified that the documented `--session` long option resumes an existing ID,
 re-emits the same hint, and exits one for an unknown ID without running the
 prompt.
+
+Track whether the call used `--session`. If that call returns non-zero, clear
+the saved ID before returning the original failure:
+
+```bash
+if [[ "$kimi_status" -ne 0 && "$kimi_resuming" -eq 1 ]]; then
+  if ! : > "$kimi_state_file"; then
+    printf 'Error: could not clear stale Kimi session state at %s\n' \
+      "$kimi_state_file" >&2
+    return 5
+  fi
+fi
+```
+
+The failed round remains failed. Because the empty state cannot satisfy the
+incremental precondition, the next invocation self-heals through a full fresh
+Kimi review.
 
 - [ ] **Step 10: Disable recursive cross-model review gates**
 

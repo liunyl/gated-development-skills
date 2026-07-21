@@ -116,9 +116,12 @@ repeats the same `kimi -r session_...` hint, while `--session <missing-id>`
 exits non-zero without running the prompt. Capture that resume hint from every
 successful Kimi review, persist it in the task workspace, and resume only with
 the documented `--session <id>` long option. A missing explicit session blocks
-the gate instead of silently approving a partial patch. A missing, legacy, or
-malformed Kimi state selects a full fresh review and is replaced only after a
-successful response exposes a valid session ID.
+the current gate instead of silently approving a partial patch. When an
+explicit Kimi resume fails, clear the wrapper's saved Kimi ID before returning
+that failure; the next invocation cannot activate incremental scope and starts
+a full fresh review. A missing, legacy, malformed, or cleared Kimi state selects
+a full fresh review and is replaced only after a successful response exposes a
+valid session ID.
 
 A rebase, squash, force-push, or other history rewrite that invalidates
 `--since` therefore requires another full review.
@@ -151,6 +154,8 @@ Extend the dependency-free shell test to prove:
 - missing session state and a failed Claude resume use a full bundle;
 - Kimi is resumed by explicit session ID, and an absent explicit session
   blocks instead of silently starting fresh on an incremental bundle;
+- a failed explicit Kimi resume fails its current gate, clears the stale ID,
+  and forces the next invocation to review the full task;
 - a checkpoint newer than the recorded reviewed `HEAD`, a changed base, and a
   first invocation in a different review mode use a full bundle;
 - dirty worktrees, missing `--base`, invalid ancestry, and empty deltas are
