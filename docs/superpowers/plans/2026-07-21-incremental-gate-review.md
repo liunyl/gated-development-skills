@@ -21,11 +21,15 @@ dependency-free fake-CLI shell test.
 - Incremental scope is commit-only: reject staged, unstaged, or untracked work.
 - Require `BASE` to be an ancestor of `SINCE` and `SINCE` to be an ancestor of
   `HEAD`; rewritten history returns to a full review.
-- A fresh reviewer never receives only an incremental patch.
+- A fresh reviewer never receives only an incremental patch; never use Kimi
+  `--continue`, which starts fresh and exits zero when its history is absent.
 - Persist the resolved base and reviewed `HEAD` per review mode only after both
   reviewers succeed; never trust a caller checkpoint newer than that record.
 - Preserve Kimi snapshot isolation, live-repository fingerprinting, concurrent
   execution, and fail-closed reviewer behavior.
+- Reviewers inspect directly: Claude cannot use `Agent` or its
+  `codex-gated-development` gate, while Kimi receives no auto-discovered
+  `kimi-gated-development` gate; deny all gate names as defense in depth.
 - Explain the safety reason near fallback and ancestry logic; do not annotate
   self-evident shell syntax.
 
@@ -39,7 +43,7 @@ dependency-free fake-CLI shell test.
 
 **Interfaces:**
 - Consumes: `--base REF`, optional `--since REF`, the current `HEAD`, clean Git
-  status, and task-scoped Claude/Kimi session markers.
+  status, and task-scoped Claude/Kimi session IDs.
 - Produces: a full review bundle, or a delta bundle containing
   `SINCE...HEAD` plus a `BASE...HEAD` stat/name summary; starts reviewers only
   after scope validation.
@@ -81,7 +85,12 @@ first `code` review with the same key and `--since`; assert it is full because
 successful-review checkpoints are per mode. After a successful round, pass a
 `--since` newer than the recorded reviewed `HEAD` and a different `--base`;
 assert both cases also fall back to full scope. Exercise both split-state cases
-(only Claude state and only Kimi state) with the same expectation.
+(only Claude state and only Kimi state) with the same expectation. Make the
+fake Kimi print a deterministic `To resume this session: kimi -r session_...`
+hint, assert later rounds use `--session <id>` rather than `--continue`, and
+make an explicit resume failure block the gate without replacing its state.
+Assert Claude's allowed tool set omits `Agent`, its denied tools name all three
+gate skills, and every Kimi call includes an empty explicit `--skills-dir`.
 
 - [ ] **Step 3: Write failing validation assertions**
 
@@ -135,9 +144,11 @@ comment.
 - [ ] **Step 6: Select full versus incremental scope from session state**
 
 Move session-key path calculation before bundle construction. Store a
-mode-specific checkpoint alongside the existing session state with two fields,
-the resolved base and reviewed `HEAD`. Activate incremental scope only when
-`--since` was requested, both reviewer session markers are non-empty, the
+mode-specific checkpoint at
+`reviewed_state_file="$session_file.$mode.reviewed"`, so the existing hashed
+session filename also protects this state from a raw session-key traversal.
+Store the resolved base and reviewed `HEAD`. Activate incremental scope only when
+`--since` was requested, both reviewer session IDs are valid, the
 checkpoint base equals the requested base, its recorded head is still in the
 current history, and `SINCE` equals or precedes that head. Otherwise warn and
 select full scope:
@@ -161,7 +172,9 @@ fi
 
 Initialize both read variables to empty strings and validate the recorded head
 as a commit before using it so corrupt state selects the full path rather than
-aborting under `set -u`.
+aborting under `set -u`. Treat Kimi state as resumable only when its content
+matches `session_[A-Za-z0-9-]+`; the legacy literal `success` forces a full
+fresh Kimi review.
 
 - [ ] **Step 7: Build both deterministic bundle forms**
 
@@ -202,9 +215,49 @@ existing report schema and `SKIPPED`/`PASS` rules.
 Parameterize `run_claude` by prompt. A normal resume receives the selected
 prompt. If it fails and a new session ID is created, call Claude with the full
 prompt and `full-review-scope.txt`; document that a fresh conversation cannot
-safely interpret a delta alone. Keep Kimi's continuation failure blocking.
+safely interpret a delta alone.
 
-- [ ] **Step 10: Record only a fully successful reviewed state**
+For Kimi, capture command output in a private temporary file, print it into the
+normal report, and parse the final resume hint:
+
+```bash
+kimi_session_id="$(sed -n \
+  's/^To resume this session: kimi -r \(session_[A-Za-z0-9-]*\)$/\1/p' \
+  "$kimi_raw_report" | tail -n 1)"
+```
+
+Use `--session "$kimi_session_id"` for a known session. A successful Kimi call
+without one valid resume hint fails the gate and does not update Kimi state.
+This replaces the unsafe `--continue` behavior, which was verified to start a
+fresh session and exit zero when no workspace history exists.
+
+- [ ] **Step 10: Prevent recursive reviewer delegation**
+
+Create an empty private directory under `review_tmp` and pass it to every Kimi
+invocation:
+
+```bash
+mkdir -p "$review_tmp/kimi-skills"
+kimi_args+=(--skills-dir "$review_tmp/kimi-skills")
+```
+
+Kimi documents `--skills-dir` as replacing auto-discovered user and project
+skill directories, so its own `kimi-gated-development` gate cannot load. In
+the Claude argument list, remove `Agent` from `--tools` and `--allowedTools`,
+then deny each runtime gate explicitly:
+
+```bash
+--disallowedTools \
+  'Skill(codex-gated-development)' \
+  'Skill(claude-gated-development)' \
+  'Skill(kimi-gated-development)' \
+  'Agent' 'Bash' 'Write' 'Edit' 'NotebookEdit' 'EnterPlanMode' 'ExitPlanMode'
+```
+
+Tell both reviewers to inspect the artifact themselves and never invoke a
+gated-development skill, external reviewer CLI, or another review agent.
+
+- [ ] **Step 11: Record only a fully successful reviewed state**
 
 After fingerprint and non-empty-report checks, and only when both reviewer
 statuses are zero, `--base` is present, the captured status is clean, and
@@ -213,21 +266,26 @@ persistent state is enabled, atomically replace the per-mode checkpoint with:
 ```bash
 state_tmp="$reviewed_state_file.tmp.$$"
 printf '%s %s\n' "$base_oid" "$head_oid" > "$state_tmp"
-mv "$state_tmp" "$reviewed_state_file"
+if ! mv -- "$state_tmp" "$reviewed_state_file"; then
+  printf 'Error: could not save reviewed checkpoint at %s\n' "$reviewed_state_file" >&2
+  exit 5
+fi
 ```
 
 Do not update the checkpoint when either reviewer fails, the reviewed scope
 contains working-tree changes, or the repository mutates. A later request whose
 `SINCE` is ahead of the last jointly successful committed head will then take
-the full path.
+the full path. Extend the existing `../../outside` and read-only-state tests
+with a clean `--base` review so they exercise the new hashed checkpoint path
+and its write-failure behavior.
 
-- [ ] **Step 11: Run the focused test and verify GREEN**
+- [ ] **Step 12: Run the focused test and verify GREEN**
 
 Run the command from Step 4.
 
 Expected: `parallel Claude and Kimi review checks passed`.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
 git add codex/skills/claude-gated-development/scripts
@@ -286,6 +344,8 @@ State exactly that `--since` is only for later rounds of the same gate,
 "commit the fixes before an incremental rerun", and "the first round of each
 review mode is full". Explain that a dirty worktree is rejected and missing or
 mismatched session/checkpoint state safely degrades to full scope.
+When no new commit exists for an evidence-only rebuttal, omit `--since` and run
+the required full re-review.
 Update the README summary and architecture primary flow/invariants without
 duplicating implementation details.
 

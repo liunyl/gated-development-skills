@@ -94,7 +94,7 @@ Incremental review requires all of the following:
 - `BASE` is an ancestor of `SINCE`, and `SINCE` is an ancestor of `HEAD`;
 - `SINCE...HEAD` is non-empty;
 - the worktree is clean;
-- a saved Claude session and a successful Kimi session marker both exist for
+- a saved Claude session and a saved explicit Kimi session ID both exist for
   the current repository and session key;
 - the same review mode has a successful-review record with the same resolved
   base, and `SINCE` is not newer than its recorded reviewed `HEAD`.
@@ -108,9 +108,16 @@ of degrading because uncommitted state cannot be represented by the reviewed
 `HEAD`; the caller must commit it before a checkpoint can be recorded safely.
 
 If the Claude resume command fails after preflight, retry the new Claude
-session once with the full bundle. Kimi keeps its existing fail-closed policy:
-a failed continuation blocks the gate instead of silently creating a fresh
-session. A rebase, squash, force-push, or other history rewrite that invalidates
+session once with the full bundle. Do not use Kimi's `--continue`: a real CLI
+probe showed that it starts a fresh session and exits successfully when no
+history exists for the workspace. Capture the `session_<uuid>` resume hint from
+every successful Kimi review, persist it in the task workspace, and resume only
+with `--session <id>`. A missing explicit session fails non-zero and blocks the
+gate instead of silently approving a partial patch. A missing, legacy, or
+malformed Kimi state selects a full fresh review and is replaced only after a
+successful response exposes a valid session ID.
+
+A rebase, squash, force-push, or other history rewrite that invalidates
 `--since` therefore requires another full review.
 
 ## Reviewer contract
@@ -123,6 +130,17 @@ context, but may inspect any final task file when session compaction or an
 interaction risk makes that necessary.
 The verdict and mutation-detection rules remain unchanged.
 
+Reviewer independence stops at the selected Claude and Kimi processes. Neither
+reviewer may invoke another gated-development skill or delegate its review to a
+third-party agent. In particular, disable Claude's own
+`codex-gated-development` skill and Kimi's own `kimi-gated-development` skill.
+Remove Claude's `Agent` tool, explicitly deny all three gate skill names as
+defense in depth, and retain only its read-only inspection tools plus non-gate
+skills. Start Kimi with an empty explicit `--skills-dir`, which replaces its
+auto-discovered user and project skills, and instruct it not to launch external
+reviewers. This prevents recursive review gates while allowing both selected
+reviewers to inspect the supplied repository state directly.
+
 ## Verification
 
 Extend the dependency-free shell test to prove:
@@ -131,9 +149,13 @@ Extend the dependency-free shell test to prove:
 - a later `--since` review contains only the new commit patch plus the
   full-task summary, for both Claude and Kimi;
 - missing session state and a failed Claude resume use a full bundle;
+- Kimi is resumed by explicit session ID, and an absent explicit session
+  blocks instead of silently starting fresh on an incremental bundle;
 - a checkpoint newer than the recorded reviewed `HEAD`, a changed base, and a
   first invocation in a different review mode use a full bundle;
 - dirty worktrees, missing `--base`, invalid ancestry, and empty deltas are
   rejected before reviewers run;
 - existing session reuse, sandboxing, fingerprinting, and failure behavior
   remain intact.
+- Claude cannot spawn agents or load a gated-development skill, and Kimi is
+  launched without auto-discovered gate skills.
