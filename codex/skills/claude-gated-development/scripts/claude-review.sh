@@ -107,7 +107,9 @@ git_dir="$(cd "$git_dir" && pwd -P)"
 status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)"
 base_oid=""
 since_oid=""
-head_oid="$(git -C "$repo_root" rev-parse HEAD)"
+# Working-tree-only review remains valid in a newly initialized repository;
+# commit-based paths below already require and validate an actual HEAD.
+head_oid="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
 
 if [[ -n "$base" ]]; then
   git -C "$repo_root" rev-parse --verify "${base}^{commit}" >/dev/null 2>&1 || die_usage "invalid base ref: $base"
@@ -531,8 +533,17 @@ fi
 # the scope or ignored the output contract. NEEDS REVISION is valid here: it
 # records the state that produced findings so the next round can be incremental.
 has_review_verdict() {
-  tr -d '\r*' < "$1" |
-    grep -Eq '^[[:space:]]*VERDICT:[[:space:]]*(PASS|NEEDS REVISION)[[:space:]]*$'
+  local last_verdict
+  # Kimi may decorate terminal output, and either reviewer may bold the final
+  # line. Select the last declared verdict so an eventual SKIPPED cannot be
+  # masked by an earlier PASS example or superseded conclusion.
+  last_verdict="$(
+    LC_ALL=C sed $'s/\033\\[[0-9;]*[[:alpha:]]//g' "$1" |
+      tr -d '\r*`' |
+      awk '/^[^[:alnum:]]*VERDICT[[:space:]]*:/{ verdict=$0 } END { print verdict }'
+  )"
+  printf '%s\n' "$last_verdict" |
+    LC_ALL=C grep -Eq '^[^[:alnum:]]*VERDICT[[:space:]]*:[[:space:]]*(PASS|NEEDS REVISION)[^[:alnum:]]*$'
 }
 if [[ "$claude_status" -eq 0 ]] && ! has_review_verdict "$claude_report"; then
   printf 'Error: Claude produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2

@@ -65,7 +65,7 @@ for _ in {1..100}; do
   sleep 0.02
 done
 [[ -e "$CLAUDE_STARTED" ]] || exit 8
-[[ -f "$PWD/repo/tracked.txt" && -f "$PWD/review-scope.txt" ]] || exit 7
+[[ -d "$PWD/repo" && -f "$PWD/review-scope.txt" ]] || exit 7
 if grep -Fq -- "$LIVE_REPO" "$PWD/review-scope.txt"; then
   exit 12
 fi
@@ -117,9 +117,10 @@ fi
 if [[ -z "${NO_KIMI_LAST_MESSAGE:-}" ]]; then
   printf 'fake kimi review\n'
   if [[ -n "${SKIP_KIMI:-}" ]]; then
+    [[ -z "${EARLY_KIMI_PASS:-}" ]] || printf 'VERDICT: PASS\n'
     printf 'VERDICT: SKIPPED\n'
   else
-    printf 'VERDICT: PASS\n'
+    printf '\033[32m  VERDICT: PASS\033[0m\n'
   fi
   printf 'To resume this session: kimi -r session_fake_review_id\n'
 fi
@@ -217,9 +218,12 @@ session_hash_for() {
 repo_a="$tmp/repo-a"
 repo_b="$tmp/repo-b"
 repo_c="$tmp/repo-c"
+repo_unborn="$tmp/repo-unborn"
 make_repo "$repo_a"
 make_repo "$repo_b"
 make_repo "$repo_c"
+git init -q "$repo_unborn"
+printf 'uncommitted plan\n' > "$repo_unborn/plan.md"
 external_secret="$tmp/external-secret.txt"
 printf 'external secret content\n' > "$external_secret"
 ln -s "$external_secret" "$repo_a/external-link"
@@ -339,6 +343,8 @@ env_state="$(printf '%s\0%s' "$repo_a_root" 'env-loser' | git -C "$repo_a" hash-
 
 (cd "$repo_a" && (sleep 5) | run_review "$repo_a" stdin-detach) \
   || fail 'review with piped stdin did not detach stdin'
+
+(cd "$repo_unborn" && run_review "$repo_unborn" unborn-working-tree)
 
 if (cd "$repo_a" && NO_LAST_MESSAGE=1 run_review "$repo_a" no-claude-report); then
   unset NO_LAST_MESSAGE
@@ -505,13 +511,13 @@ checkpoint_before_skipped="$(cat "$skipped_checkpoint")"
 printf 'SKIPPED_REVIEW_BODY\n' > "$repo_incremental/skipped.txt"
 git -C "$repo_incremental" add skipped.txt
 git -C "$repo_incremental" commit -qm 'add skipped review fixture'
-SKIP_KIMI=1; export SKIP_KIMI
+SKIP_KIMI=1; EARLY_KIMI_PASS=1; export SKIP_KIMI EARLY_KIMI_PASS
 if (cd "$repo_incremental" && run_review "$repo_incremental" "$skipped_key" "" \
   --base "$changed_base" --since "$skipped_previous"); then
-  unset SKIP_KIMI
-  fail 'SKIPPED Kimi verdict did not fail the gate'
+  unset SKIP_KIMI EARLY_KIMI_PASS
+  fail 'final SKIPPED Kimi verdict did not fail the gate'
 fi
-unset SKIP_KIMI
+unset SKIP_KIMI EARLY_KIMI_PASS
 [[ "$(cat "$skipped_checkpoint")" == "$checkpoint_before_skipped" ]] || fail 'SKIPPED verdict advanced the joint review checkpoint'
 
 printf 'parallel Claude and Kimi review checks passed\n'
