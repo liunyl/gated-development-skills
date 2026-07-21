@@ -22,6 +22,8 @@ dependency-free fake-CLI shell test.
 - Require `BASE` to be an ancestor of `SINCE` and `SINCE` to be an ancestor of
   `HEAD`; rewritten history returns to a full review.
 - A fresh reviewer never receives only an incremental patch.
+- Persist the resolved base and reviewed `HEAD` per review mode only after both
+  reviewers succeed; never trust a caller checkpoint newer than that record.
 - Preserve Kimi snapshot isolation, live-repository fingerprinting, concurrent
   execution, and fail-closed reviewer behavior.
 - Explain the safety reason near fallback and ancestry logic; do not annotate
@@ -51,6 +53,7 @@ into a test-only capture directory:
 prompt="$1"
 bundle_path="$(printf '%s\n' "$prompt" |
   sed -n 's/^Precomputed review bundle: //p')"
+[[ -n "$bundle_path" && -f "$bundle_path" ]] || exit 98
 call_no="$(($(wc -l < "$CLAUDE_LOG") + 1))"
 cp "$bundle_path" "$BUNDLE_CAPTURE/claude-$call_no.txt"
 ```
@@ -73,7 +76,12 @@ Assert both second-round bundles contain the newest marker, omit the old patch
 body, and contain `Full task summary`. Then make Claude resume fail on a third
 round and assert the fresh Claude retry bundle contains all task markers.
 Use a new task key with `--since` and assert both reviewers receive the full
-bundle when no session state exists.
+bundle when no session state exists. After an `adversarial` review, invoke the
+first `code` review with the same key and `--since`; assert it is full because
+successful-review checkpoints are per mode. After a successful round, pass a
+`--since` newer than the recorded reviewed `HEAD` and a different `--base`;
+assert both cases also fall back to full scope. Exercise both split-state cases
+(only Claude state and only Kimi state) with the same expectation.
 
 - [ ] **Step 3: Write failing validation assertions**
 
@@ -101,8 +109,8 @@ round still contains the old patch before argument parsing is added).
 
 - [ ] **Step 5: Parse and validate `--since`**
 
-Add `since=""` and the normal non-empty option parsing. After resolving the
-repository, enforce:
+Add `since=""`, include `[--since REF]` in `usage()`, and parse the normal
+non-empty option. After resolving the repository, enforce:
 
 ```bash
 [[ -n "$base" ]] || die_usage "--since requires --base"
@@ -120,22 +128,40 @@ git -C "$repo_root" diff --quiet "$since"...HEAD -- && {
 ```
 
 Resolve base/since/HEAD to commit IDs for bundle metadata after validation.
+The three-dot delta is safe because the ancestry check guarantees that
+`merge-base(SINCE, HEAD)` equals `SINCE`; record that invariant in a nearby
+comment.
 
 - [ ] **Step 6: Select full versus incremental scope from session state**
 
-Move session-key path calculation before bundle construction. Activate
-incremental scope only when `--since` was requested and both the saved Claude
-session file and Kimi `.successful-review` marker are non-empty. Otherwise
-warn and select full scope:
+Move session-key path calculation before bundle construction. Store a
+mode-specific checkpoint alongside the existing session state with two fields,
+the resolved base and reviewed `HEAD`. Activate incremental scope only when
+`--since` was requested, both reviewer session markers are non-empty, the
+checkpoint base equals the requested base, its recorded head is still in the
+current history, and `SINCE` equals or precedes that head. Otherwise warn and
+select full scope:
 
 ```bash
 incremental_active=0
-if [[ -n "$since" && -s "$session_file" && -s "$kimi_state_file" ]]; then
-  incremental_active=1
-elif [[ -n "$since" ]]; then
-  printf 'Warning: reviewer continuity is incomplete; running a full review\n' >&2
+if [[ -n "$since" ]]; then
+  if [[ -s "$session_file" && -s "$kimi_state_file" &&
+        -s "$reviewed_state_file" ]]; then
+    read -r reviewed_base reviewed_head < "$reviewed_state_file" || true
+  fi
+  if [[ "$reviewed_base" == "$base_oid" ]] &&
+     git -C "$repo_root" merge-base --is-ancestor "$since_oid" "$reviewed_head" &&
+     git -C "$repo_root" merge-base --is-ancestor "$reviewed_head" "$head_oid"; then
+    incremental_active=1
+  else
+    printf 'Warning: reviewer checkpoint is incomplete or mismatched; running a full review\n' >&2
+  fi
 fi
 ```
+
+Initialize both read variables to empty strings and validate the recorded head
+as a commit before using it so corrupt state selects the full path rather than
+aborting under `set -u`.
 
 - [ ] **Step 7: Build both deterministic bundle forms**
 
@@ -143,9 +169,18 @@ Retain the current full bundle in `full-review-scope.txt`. When incremental is
 active, write `review-scope.txt` with:
 
 ```bash
+printf 'Repository: %s\n' "$repo_root"
+printf 'Review mode: %s\n' "$mode"
+printf 'Base ref: %s\n' "$base_oid"
+printf 'Since ref: %s\n' "$since_oid"
+printf 'HEAD: %s\n' "$head_oid"
+printf '\n## Commits since prior review\n'
 git -C "$repo_root" log --oneline --no-decorate "$since"..HEAD
+printf '\n## Incremental changed files\n'
 git -C "$repo_root" diff --name-status "$since"...HEAD --
+printf '\n## Incremental patch\n'
 git -C "$repo_root" diff --binary "$since"...HEAD --
+printf '\n## Full task summary\n'
 git -C "$repo_root" diff --stat "$base"...HEAD --
 git -C "$repo_root" diff --name-status "$base"...HEAD --
 ```
@@ -157,9 +192,10 @@ snapshot, but copy only the selected bundle into its workspace.
 
 Build a prompt for each scope. The incremental form must say that
 `SINCE...HEAD` is the primary patch, prior-session findings remain context,
-and the reviewer may inspect final affected files/callers/tests without
-re-reading unchanged task patches. Keep the existing report schema and
-`SKIPPED`/`PASS` rules.
+and the reviewer may inspect final affected files/callers/tests. Say unchanged
+task patches need not be reread merely to reconstruct context, while permitting
+inspection when compaction or an interaction risk makes it necessary. Keep the
+existing report schema and `SKIPPED`/`PASS` rules.
 
 - [ ] **Step 9: Retry a failed Claude resume with the full prompt**
 
@@ -168,13 +204,30 @@ prompt. If it fails and a new session ID is created, call Claude with the full
 prompt and `full-review-scope.txt`; document that a fresh conversation cannot
 safely interpret a delta alone. Keep Kimi's continuation failure blocking.
 
-- [ ] **Step 10: Run the focused test and verify GREEN**
+- [ ] **Step 10: Record only a fully successful reviewed state**
+
+After fingerprint and non-empty-report checks, and only when both reviewer
+statuses are zero, `--base` is present, the captured status is clean, and
+persistent state is enabled, atomically replace the per-mode checkpoint with:
+
+```bash
+state_tmp="$reviewed_state_file.tmp.$$"
+printf '%s %s\n' "$base_oid" "$head_oid" > "$state_tmp"
+mv "$state_tmp" "$reviewed_state_file"
+```
+
+Do not update the checkpoint when either reviewer fails, the reviewed scope
+contains working-tree changes, or the repository mutates. A later request whose
+`SINCE` is ahead of the last jointly successful committed head will then take
+the full path.
+
+- [ ] **Step 11: Run the focused test and verify GREEN**
 
 Run the command from Step 4.
 
 Expected: `parallel Claude and Kimi review checks passed`.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add codex/skills/claude-gated-development/scripts
@@ -201,14 +254,11 @@ requirement, and full first rounds. Add an architecture assertion only for the
 new durable scope flow.
 
 ```bash
-grep -Fq -- '--since "$PREVIOUS_REVIEW_HEAD"' "$codex_gate" ||
-  fail 'Codex gate does not show an incremental review command'
-grep -Fq 'commit all review fixes' "$codex_gate" ||
-  fail 'Codex gate does not require committed incremental fixes'
-grep -Fq 'first round of each' "$codex_gate" ||
-  fail 'Codex gate does not preserve full first rounds'
-grep -Fq 'incremental review' "$root/docs/architecture/01-overview.md" ||
-  fail 'architecture does not describe incremental review scope'
+CODEX_GATE="$ROOT/codex/skills/claude-gated-development/SKILL.md"
+grep -Fq -- '--since "$PREVIOUS_REVIEW_HEAD"' "$CODEX_GATE"
+grep -Fq 'commit the fixes before an incremental rerun' "$CODEX_GATE"
+grep -Fq 'first round of each review mode is full' "$CODEX_GATE"
+grep -Fq 'incremental review' "$ROOT/docs/architecture/01-overview.md"
 ```
 
 - [ ] **Step 2: Run the infrastructure test and verify RED**
@@ -232,8 +282,10 @@ PREVIOUS_REVIEW_HEAD="$(git rev-parse HEAD)"
 "$RUNNER" code --base "$TASK_BASE" --since "$PREVIOUS_REVIEW_HEAD" --focus "..."
 ```
 
-State that `--since` is only for later rounds of the same gate, requires a
-clean worktree, and safely degrades to full scope if sessions are missing.
+State exactly that `--since` is only for later rounds of the same gate,
+"commit the fixes before an incremental rerun", and "the first round of each
+review mode is full". Explain that a dirty worktree is rejected and missing or
+mismatched session/checkpoint state safely degrades to full scope.
 Update the README summary and architecture primary flow/invariants without
 duplicating implementation details.
 

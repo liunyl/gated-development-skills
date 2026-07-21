@@ -21,7 +21,8 @@ does not avoid repeated patch ingestion.
 
 ## Non-goals
 
-- Do not infer or persist the last reviewed commit automatically.
+- Do not infer a checkpoint from branch history. Persist only the base and
+  `HEAD` of a review that both reviewers actually completed.
 - Do not change the Claude-side or Kimi-side gate skills.
 - Do not optimize Kimi's local repository snapshot; the expensive input is the
   review prompt and patch, while the snapshot lets the reviewer inspect final
@@ -39,7 +40,7 @@ claude-review.sh code --base "$TASK_BASE" --since "$PREVIOUS_REVIEW_HEAD" \
 
 `--base` continues to identify the complete task. `--since` identifies the
 last commit successfully seen in the current planning or final-code gate. The
-caller owns this checkpoint explicitly:
+caller supplies this checkpoint explicitly:
 
 1. Run the first round with `--base` and without `--since`.
 2. Save `git rev-parse HEAD` after both reviewers complete.
@@ -51,6 +52,17 @@ caller owns this checkpoint explicitly:
 The first round of each distinct gate remains full even if the task session
 already exists. In particular, the final-code gate must not use the planning
 gate's last reviewed commit as `--since`.
+
+The wrapper verifies the caller's checkpoint against its own successful-review
+record. For each persistent task and review mode (`adversarial` or `code`), it
+stores the resolved task base and reviewed `HEAD` only after both reviewers
+succeed on a clean committed scope, produce non-empty reports, and leave the
+repository unchanged. A `--since` commit may equal or precede that reviewed
+`HEAD`, which permits a caller to deliberately re-review a larger delta; it may
+not be newer. The stored base must equal the current resolved base. Per-mode
+records mechanically make the first `code` review full even after an
+`adversarial` planning review. A successful full review that includes working-
+tree changes does not create a commit checkpoint.
 
 ## Scope construction
 
@@ -83,12 +95,17 @@ Incremental review requires all of the following:
 - `SINCE...HEAD` is non-empty;
 - the worktree is clean;
 - a saved Claude session and a successful Kimi session marker both exist for
-  the current repository and session key.
+  the current repository and session key;
+- the same review mode has a successful-review record with the same resolved
+  base, and `SINCE` is not newer than its recorded reviewed `HEAD`.
 
 Invalid refs, ancestry, an empty delta, or a dirty worktree fail before either
-reviewer starts. Missing reviewer state is not an error: the wrapper warns and
-sends both reviewers the full bundle so a fresh session never receives a delta
-without its prior context.
+reviewer starts. Missing, mismatched, or stale reviewer/checkpoint state is not
+an error: the wrapper warns and sends both reviewers the full bundle so a fresh
+session, a different review mode, or an unverifiable checkpoint never receives
+a delta without its prior context. A dirty incremental request fails instead
+of degrading because uncommitted state cannot be represented by the reviewed
+`HEAD`; the caller must commit it before a checkpoint can be recorded safely.
 
 If the Claude resume command fails after preflight, retry the new Claude
 session once with the full bundle. Kimi keeps its existing fail-closed policy:
@@ -101,7 +118,9 @@ session. A rebase, squash, force-push, or other history rewrite that invalidates
 The incremental prompt names the delta as the primary review scope. Reviewers
 must re-check earlier blocking findings affected by the delta and may inspect
 the final versions of changed files, callers, tests, and repository guidance.
-They should not reread unchanged task patches merely to reconstruct context.
+They are not required to reread unchanged task patches merely to reconstruct
+context, but may inspect any final task file when session compaction or an
+interaction risk makes that necessary.
 The verdict and mutation-detection rules remain unchanged.
 
 ## Verification
@@ -112,6 +131,8 @@ Extend the dependency-free shell test to prove:
 - a later `--since` review contains only the new commit patch plus the
   full-task summary, for both Claude and Kimi;
 - missing session state and a failed Claude resume use a full bundle;
+- a checkpoint newer than the recorded reviewed `HEAD`, a changed base, and a
+  first invocation in a different review mode use a full bundle;
 - dirty worktrees, missing `--base`, invalid ancestry, and empty deltas are
   rejected before reviewers run;
 - existing session reuse, sandboxing, fingerprinting, and failure behavior
