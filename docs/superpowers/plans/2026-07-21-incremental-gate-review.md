@@ -27,9 +27,9 @@ dependency-free fake-CLI shell test.
   reviewers succeed; never trust a caller checkpoint newer than that record.
 - Preserve Kimi snapshot isolation, live-repository fingerprinting, concurrent
   execution, and fail-closed reviewer behavior.
-- Reviewers inspect directly: Claude cannot use `Agent` or its
-  `codex-gated-development` gate, while Kimi receives no auto-discovered
-  `kimi-gated-development` gate; deny all gate names as defense in depth.
+- Preserve each reviewer's built-in subagents. Disable only Claude's
+  `codex-gated-development` gate and Kimi's auto-discovered
+  `kimi-gated-development` gate.
 - Explain the safety reason near fallback and ancestry logic; do not annotate
   self-evident shell syntax.
 
@@ -89,8 +89,9 @@ assert both cases also fall back to full scope. Exercise both split-state cases
 fake Kimi print a deterministic `To resume this session: kimi -r session_...`
 hint, assert later rounds use `--session <id>` rather than `--continue`, and
 make an explicit resume failure block the gate without replacing its state.
-Assert Claude's allowed tool set omits `Agent`, its denied tools name all three
-gate skills, and every Kimi call includes an empty explicit `--skills-dir`.
+Assert Claude's allowed tool set still includes `Agent`, its denied tools name
+`Skill(codex-gated-development)`, and every Kimi call includes an empty
+explicit `--skills-dir`.
 
 - [ ] **Step 3: Write failing validation assertions**
 
@@ -231,7 +232,7 @@ without one valid resume hint fails the gate and does not update Kimi state.
 This replaces the unsafe `--continue` behavior, which was verified to start a
 fresh session and exit zero when no workspace history exists.
 
-- [ ] **Step 10: Prevent recursive reviewer delegation**
+- [ ] **Step 10: Disable recursive cross-model review gates**
 
 Create an empty private directory under `review_tmp` and pass it to every Kimi
 invocation:
@@ -243,19 +244,16 @@ kimi_args+=(--skills-dir "$review_tmp/kimi-skills")
 
 Kimi documents `--skills-dir` as replacing auto-discovered user and project
 skill directories, so its own `kimi-gated-development` gate cannot load. In
-the Claude argument list, remove `Agent` from `--tools` and `--allowedTools`,
-then deny each runtime gate explicitly:
+the Claude argument list, retain `Agent` and deny its runtime gate explicitly:
 
 ```bash
 --disallowedTools \
   'Skill(codex-gated-development)' \
-  'Skill(claude-gated-development)' \
-  'Skill(kimi-gated-development)' \
-  'Agent' 'Bash' 'Write' 'Edit' 'NotebookEdit' 'EnterPlanMode' 'ExitPlanMode'
+  'Bash' 'Write' 'Edit' 'NotebookEdit' 'EnterPlanMode' 'ExitPlanMode'
 ```
 
-Tell both reviewers to inspect the artifact themselves and never invoke a
-gated-development skill, external reviewer CLI, or another review agent.
+Tell Claude not to invoke `codex-gated-development` and tell Kimi not to invoke
+`kimi-gated-development`. Their built-in same-runtime subagents remain allowed.
 
 - [ ] **Step 11: Record only a fully successful reviewed state**
 

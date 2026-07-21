@@ -130,16 +130,13 @@ context, but may inspect any final task file when session compaction or an
 interaction risk makes that necessary.
 The verdict and mutation-detection rules remain unchanged.
 
-Reviewer independence stops at the selected Claude and Kimi processes. Neither
-reviewer may invoke another gated-development skill or delegate its review to a
-third-party agent. In particular, disable Claude's own
-`codex-gated-development` skill and Kimi's own `kimi-gated-development` skill.
-Remove Claude's `Agent` tool, explicitly deny all three gate skill names as
-defense in depth, and retain only its read-only inspection tools plus non-gate
-skills. Start Kimi with an empty explicit `--skills-dir`, which replaces its
-auto-discovered user and project skills, and instruct it not to launch external
-reviewers. This prevents recursive review gates while allowing both selected
-reviewers to inspect the supplied repository state directly.
+Each reviewer may use its own built-in subagents, but it must not recurse into
+its runtime's cross-model review gate. Keep Claude's `Agent` tool and disable
+its `codex-gated-development` skill through `--disallowedTools`. Start Kimi
+with an empty explicit `--skills-dir`, which replaces auto-discovered user and
+project skills and therefore makes `kimi-gated-development` unavailable while
+leaving built-in Kimi subagents intact. No broader agent or process restriction
+is required.
 
 ## Verification
 
@@ -157,5 +154,6 @@ Extend the dependency-free shell test to prove:
   rejected before reviewers run;
 - existing session reuse, sandboxing, fingerprinting, and failure behavior
   remain intact.
-- Claude cannot spawn agents or load a gated-development skill, and Kimi is
-  launched without auto-discovered gate skills.
+- Claude may spawn its own subagents but cannot load
+  `codex-gated-development`; Kimi may use its own subagents but cannot discover
+  `kimi-gated-development`.
