@@ -53,7 +53,8 @@ file_mode() {
 assert_rejected() {
   label=$1
   expected_status=$2
-  shift 2
+  expected_stderr=$3
+  shift 3
   rejected_stdout="$TMP/rejected.out"
   rejected_stderr="$TMP/rejected.err"
 
@@ -63,7 +64,10 @@ assert_rejected() {
     actual_status=$?
   fi
 
-  if test "$actual_status" -eq "$expected_status" && test -s "$rejected_stderr"; then
+  if test "$actual_status" -eq "$expected_status" &&
+    test ! -s "$rejected_stdout" &&
+    grep -Fq "$expected_stderr" "$rejected_stderr"
+  then
     return
   fi
 
@@ -72,6 +76,7 @@ assert_rejected() {
       "rejection case: $label" \
       "expected status: $expected_status" \
       "actual status: $actual_status" \
+      "expected stderr substring: $expected_stderr" \
       'stdout:'
     cat "$rejected_stdout"
     printf '%s\n' 'stderr:'
@@ -143,13 +148,15 @@ test "$(grep -Ec '^[[:space:]]*<!-- BEGIN bootstrap-project: engineering-standar
 test "$(grep -Ec '^[[:space:]]*<!-- END bootstrap-project: engineering-standards -->[[:space:]]*$' "$TMP/whitespace.md")" -eq 1
 
 # Malformed and duplicate matching markers fail without changing the target.
+MALFORMED_TARGET_ERROR='update-managed-block: invalid TARGET: malformed or duplicate markers for engineering-standards'
 cat >"$TMP/malformed.md" <<'EOF'
 Keep me.
 <!-- BEGIN bootstrap-project: engineering-standards -->
 Incomplete block.
 EOF
 cp "$TMP/malformed.md" "$TMP/malformed.before"
-assert_rejected missing-end-marker 2 "$MERGE" "$TMP/malformed.md" "$BLOCK"
+assert_rejected missing-end-marker 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/malformed.md" "$BLOCK"
 cmp "$TMP/malformed.md" "$TMP/malformed.before"
 
 cat >"$TMP/trailing-marker-text.md" <<'EOF'
@@ -159,7 +166,8 @@ Untrusted content.
 <!-- END bootstrap-project: engineering-standards --> invalid
 EOF
 cp "$TMP/trailing-marker-text.md" "$TMP/trailing-marker-text.before"
-assert_rejected trailing-marker-text 2 "$MERGE" "$TMP/trailing-marker-text.md" "$BLOCK"
+assert_rejected trailing-marker-text 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/trailing-marker-text.md" "$BLOCK"
 cmp "$TMP/trailing-marker-text.md" "$TMP/trailing-marker-text.before"
 
 cat >"$TMP/leading-marker-text.md" <<'EOF'
@@ -169,7 +177,8 @@ Untrusted content.
 invalid <!-- END bootstrap-project: engineering-standards -->
 EOF
 cp "$TMP/leading-marker-text.md" "$TMP/leading-marker-text.before"
-assert_rejected leading-marker-text 2 "$MERGE" "$TMP/leading-marker-text.md" "$BLOCK"
+assert_rejected leading-marker-text 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/leading-marker-text.md" "$BLOCK"
 cmp "$TMP/leading-marker-text.md" "$TMP/leading-marker-text.before"
 
 cat >"$TMP/internal-marker-whitespace.md" <<'EOF'
@@ -180,6 +189,7 @@ Untrusted content.
 EOF
 cp "$TMP/internal-marker-whitespace.md" "$TMP/internal-marker-whitespace.before"
 assert_rejected internal-marker-whitespace 2 \
+  "$MALFORMED_TARGET_ERROR" \
   "$MERGE" "$TMP/internal-marker-whitespace.md" "$BLOCK"
 cmp "$TMP/internal-marker-whitespace.md" "$TMP/internal-marker-whitespace.before"
 
@@ -191,8 +201,64 @@ Untrusted content.
 EOF
 cp "$TMP/missing-marker-terminator.md" "$TMP/missing-marker-terminator.before"
 assert_rejected missing-marker-terminator 2 \
+  "$MALFORMED_TARGET_ERROR" \
   "$MERGE" "$TMP/missing-marker-terminator.md" "$BLOCK"
 cmp "$TMP/missing-marker-terminator.md" "$TMP/missing-marker-terminator.before"
+
+printf '%b\n' \
+  'Keep ID-leading whitespace unchanged.' \
+  '<!-- BEGIN bootstrap-project:  engineering-standards -->' \
+  'Untrusted content.' \
+  '<!-- END bootstrap-project:\tengineering-standards -->' \
+  >"$TMP/id-leading-whitespace.md"
+cp "$TMP/id-leading-whitespace.md" "$TMP/id-leading-whitespace.before"
+assert_rejected id-leading-whitespace 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/id-leading-whitespace.md" "$BLOCK"
+cmp "$TMP/id-leading-whitespace.md" "$TMP/id-leading-whitespace.before"
+
+printf '%b\n' \
+  'Keep keyword whitespace unchanged.' \
+  '<!-- BEGIN  bootstrap-project: engineering-standards -->' \
+  'Untrusted content.' \
+  '<!-- END\tbootstrap-project: engineering-standards -->' \
+  >"$TMP/keyword-whitespace.md"
+cp "$TMP/keyword-whitespace.md" "$TMP/keyword-whitespace.before"
+assert_rejected keyword-whitespace 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/keyword-whitespace.md" "$BLOCK"
+cmp "$TMP/keyword-whitespace.md" "$TMP/keyword-whitespace.before"
+
+printf '%b\n' \
+  'Keep comment whitespace unchanged.' \
+  '<!--  BEGIN bootstrap-project: engineering-standards -->' \
+  'Untrusted content.' \
+  '<!--\tEND bootstrap-project: engineering-standards -->' \
+  >"$TMP/comment-whitespace.md"
+cp "$TMP/comment-whitespace.md" "$TMP/comment-whitespace.before"
+assert_rejected comment-whitespace 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/comment-whitespace.md" "$BLOCK"
+cmp "$TMP/comment-whitespace.md" "$TMP/comment-whitespace.before"
+
+cat >"$TMP/missing-structural-whitespace.md" <<'EOF'
+Keep missing structural whitespace unchanged.
+<!--BEGINbootstrap-project:engineering-standards -->
+Untrusted content.
+<!--ENDbootstrap-project:engineering-standards -->
+EOF
+cp "$TMP/missing-structural-whitespace.md" "$TMP/missing-structural-whitespace.before"
+assert_rejected missing-structural-whitespace 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/missing-structural-whitespace.md" "$BLOCK"
+cmp "$TMP/missing-structural-whitespace.md" "$TMP/missing-structural-whitespace.before"
+
+cat >"$TMP/missing-colon-whitespace.md" <<'EOF'
+Keep missing colon whitespace unchanged.
+<!-- BEGIN bootstrap-project:engineering-standards -->
+Untrusted content.
+<!-- END bootstrap-project:engineering-standards -->
+EOF
+cp "$TMP/missing-colon-whitespace.md" "$TMP/missing-colon-whitespace.before"
+assert_rejected missing-colon-whitespace 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/missing-colon-whitespace.md" "$BLOCK"
+cmp "$TMP/missing-colon-whitespace.md" "$TMP/missing-colon-whitespace.before"
 
 cat >"$TMP/duplicate.md" <<'EOF'
 <!-- BEGIN bootstrap-project: engineering-standards -->
@@ -203,7 +269,8 @@ Second.
 <!-- END bootstrap-project: engineering-standards -->
 EOF
 cp "$TMP/duplicate.md" "$TMP/duplicate.before"
-assert_rejected duplicate-markers 2 "$MERGE" "$TMP/duplicate.md" "$BLOCK"
+assert_rejected duplicate-markers 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/duplicate.md" "$BLOCK"
 cmp "$TMP/duplicate.md" "$TMP/duplicate.before"
 
 # A longer marker ID is unrelated and must not be treated as a malformed match.
@@ -226,17 +293,63 @@ cp "$BLOCK" "$TMP/option-like-paths/-block.md"
 )
 
 # Operational command failures are distinct from input validation failures.
-mkdir "$TMP/fail-stat" "$TMP/fail-awk"
+mkdir "$TMP/fail-stat" "$TMP/fail-awk" "$TMP/counting-awk"
 printf '%s\n' '#!/bin/sh' 'exit 1' >"$TMP/fail-stat/stat"
 printf '%s\n' '#!/bin/sh' 'exit 1' >"$TMP/fail-awk/awk"
-chmod +x "$TMP/fail-stat/stat" "$TMP/fail-awk/awk"
+cat >"$TMP/counting-awk/awk" <<'EOF'
+#!/bin/sh
+count=0
+if test -f "$AWK_COUNT_FILE"; then
+  IFS= read -r count <"$AWK_COUNT_FILE"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$AWK_COUNT_FILE"
+if test "$count" -eq "${AWK_FAIL_ON:-0}"; then
+  printf 'forced awk failure on invocation %s\n' "$count" >&2
+  exit 9
+fi
+if test "$count" -eq "${AWK_REMOVE_ON:-0}"; then
+  rm -f "$AWK_REMOVE_FILE"
+fi
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$TMP/fail-stat/stat" "$TMP/fail-awk/awk" "$TMP/counting-awk/awk"
 cp "$TMP/replace.md" "$TMP/stat-failure.before"
-assert_rejected stat-command-failure 3 env PATH="$TMP/fail-stat:$PATH" \
+assert_rejected stat-command-failure 3 \
+  'update-managed-block: cannot read mode for TARGET:' \
+  env PATH="$TMP/fail-stat:$PATH" \
   "$MERGE" "$TMP/replace.md" "$BLOCK"
 cmp "$TMP/replace.md" "$TMP/stat-failure.before"
-assert_rejected awk-command-failure 3 env PATH="$TMP/fail-awk:$PATH" \
+assert_rejected block-scanner-failure 3 \
+  'update-managed-block: cannot inspect BLOCK:' \
+  env PATH="$TMP/fail-awk:$PATH" \
   "$MERGE" "$TMP/awk-failure.md" "$BLOCK"
 test ! -e "$TMP/awk-failure.md"
+
+REAL_AWK=$(command -v awk)
+printf '%s\n' 0 >"$TMP/awk-count"
+cp "$TMP/replace.md" "$TMP/target-scan-failure.md"
+cp "$TMP/target-scan-failure.md" "$TMP/target-scan-failure.before"
+assert_rejected target-scanner-failure 3 \
+  'update-managed-block: cannot inspect TARGET:' \
+  env PATH="$TMP/counting-awk:$PATH" \
+  REAL_AWK="$REAL_AWK" AWK_COUNT_FILE="$TMP/awk-count" AWK_FAIL_ON=2 \
+  "$MERGE" "$TMP/target-scan-failure.md" "$BLOCK"
+cmp "$TMP/target-scan-failure.md" "$TMP/target-scan-failure.before"
+
+# Losing BLOCK during replacement must fail before chmod/mv and clean the temporary render.
+printf '%s\n' 0 >"$TMP/awk-count"
+cp "$BLOCK" "$TMP/render-failure-block.md"
+cp "$TMP/replace.md" "$TMP/render-failure.md"
+cp "$TMP/render-failure.md" "$TMP/render-failure.before"
+assert_rejected replacement-block-read-failure 3 \
+  'update-managed-block: cannot render TARGET from BLOCK:' \
+  env PATH="$TMP/counting-awk:$PATH" \
+  REAL_AWK="$REAL_AWK" AWK_COUNT_FILE="$TMP/awk-count" AWK_REMOVE_ON=3 \
+  AWK_REMOVE_FILE="$TMP/render-failure-block.md" \
+  "$MERGE" "$TMP/render-failure.md" "$TMP/render-failure-block.md"
+cmp "$TMP/render-failure.md" "$TMP/render-failure.before"
+test -z "$(find "$TMP" -name '.bootstrap-project.*' -print)"
 
 # Execute the documented resolver so relative overrides cannot select helpers
 # from the repository being bootstrapped.
@@ -270,8 +383,10 @@ printf '%s\n' '#!/bin/sh' >"$TARGET_REPO/$RELATIVE_ROOT/.claude/skills/bootstrap
 
 assert_relative_resolution_rejected() {
   label=$1
-  shift
-  assert_rejected "$label-relative-resolution" 2 run_resolver_in_target "$@"
+  expected_stderr=$2
+  shift 2
+  assert_rejected "$label-relative-resolution" 2 "$expected_stderr" \
+    run_resolver_in_target "$@"
 }
 
 run_resolver_in_target() {
@@ -279,27 +394,32 @@ run_resolver_in_target() {
 }
 
 assert_relative_resolution_rejected BOOTSTRAP_PROJECT_SKILL_DIR \
+  'bootstrap-project: trusted skill directory must be absolute' \
   BOOTSTRAP_PROJECT_SKILL_DIR="$RELATIVE_ROOT/skills/bootstrap-project" \
   HOME="$TMP/home"
 assert_relative_resolution_rejected CLAUDE_CONFIG_DIR \
+  'bootstrap-project: trusted skill roots must be absolute' \
   BOOTSTRAP_PROJECT_SKILL_DIR= \
   CLAUDE_CONFIG_DIR="$RELATIVE_ROOT" \
   CODEX_HOME="$TMP/missing-codex" \
   KIMI_CODE_HOME="$TMP/missing-kimi" \
   HOME="$TMP/home"
 assert_relative_resolution_rejected CODEX_HOME \
+  'bootstrap-project: trusted skill roots must be absolute' \
   BOOTSTRAP_PROJECT_SKILL_DIR= \
   CLAUDE_CONFIG_DIR="$TMP/missing-claude" \
   CODEX_HOME="$RELATIVE_ROOT" \
   KIMI_CODE_HOME="$TMP/missing-kimi" \
   HOME="$TMP/home"
 assert_relative_resolution_rejected KIMI_CODE_HOME \
+  'bootstrap-project: trusted skill roots must be absolute' \
   BOOTSTRAP_PROJECT_SKILL_DIR= \
   CLAUDE_CONFIG_DIR="$TMP/missing-claude" \
   CODEX_HOME="$TMP/missing-codex" \
   KIMI_CODE_HOME="$RELATIVE_ROOT" \
   HOME="$TMP/home"
 assert_relative_resolution_rejected HOME-defaults \
+  'bootstrap-project: trusted skill roots must be absolute' \
   BOOTSTRAP_PROJECT_SKILL_DIR= \
   CLAUDE_CONFIG_DIR= \
   CODEX_HOME= \
@@ -311,7 +431,9 @@ printf '%s\n' 'Destination content.' >"$TMP/destination.md"
 cp "$TMP/destination.md" "$TMP/destination.before"
 ln -s destination.md "$TMP/link.md"
 link_before=$(readlink "$TMP/link.md")
-assert_rejected symbolic-link-target 2 "$MERGE" "$TMP/link.md" "$BLOCK"
+assert_rejected symbolic-link-target 2 \
+  'update-managed-block: symbolic-link TARGET is not allowed:' \
+  "$MERGE" "$TMP/link.md" "$BLOCK"
 test -L "$TMP/link.md"
 test "$(readlink "$TMP/link.md")" = "$link_before"
 cmp "$TMP/destination.md" "$TMP/destination.before"

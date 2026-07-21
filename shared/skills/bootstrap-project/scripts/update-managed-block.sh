@@ -91,21 +91,41 @@ if test -e "$target"; then
   fi
   # A matching-ID marker with extra text is ambiguous; fail closed rather than append beside it.
   if counts=$(awk -v begin="$begin" -v end="$end" -v id="$begin_id" '
-    function matches_id(marker, prefix, offset, relative, start, rest, first) {
+    function matches_id(marker, keyword, id, offset, relative, start, rest, first, opener, project) {
+      opener = "<!--"
+      project = "bootstrap-project:"
       offset = 1
-      while ((relative = index(substr(marker, offset), prefix))) {
+      while ((relative = index(substr(marker, offset), opener))) {
         start = offset + relative - 1
-        rest = substr(marker, start + length(prefix))
+        rest = substr(marker, start + length(opener))
+        sub(/^[[:space:]]*/, "", rest)
+        if (substr(rest, 1, length(keyword)) != keyword) {
+          offset = start + length(opener)
+          continue
+        }
+        rest = substr(rest, length(keyword) + 1)
+        sub(/^[[:space:]]*/, "", rest)
+        if (substr(rest, 1, length(project)) != project) {
+          offset = start + length(opener)
+          continue
+        }
+        rest = substr(rest, length(project) + 1)
+        sub(/^[[:space:]]*/, "", rest)
+        if (substr(rest, 1, length(id)) != id) {
+          offset = start + length(opener)
+          continue
+        }
+        rest = substr(rest, length(id) + 1)
         if (rest == "") return 1
         first = substr(rest, 1, 1)
         if (first !~ /[A-Za-z0-9._-]/) return 1
-        offset = start + length(prefix)
+        offset = start + length(opener)
       }
       return 0
     }
     { marker = $0; sub(/^[[:space:]]*/, "", marker); sub(/[[:space:]]*$/, "", marker) }
-    matches_id(marker, "<!-- BEGIN bootstrap-project: " id) { raw_begins++ }
-    matches_id(marker, "<!-- END bootstrap-project: " id) { raw_ends++ }
+    matches_id(marker, "BEGIN", id) { raw_begins++ }
+    matches_id(marker, "END", id) { raw_ends++ }
     marker == begin { begins++; if (ends) reversed = 1 }
     marker == end { ends++; if (!begins) reversed = 1 }
     END { print begins + 0, ends + 0, reversed + 0, raw_begins + 0, raw_ends + 0 }
@@ -133,27 +153,32 @@ trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
 case $action in
   created)
-    cat "$block" >"$tmp"
+    cat "$block" >"$tmp" || operational_error "cannot render TARGET from BLOCK: $block"
     ;;
   appended)
     {
-      cat "$target"
-      printf '\n'
+      cat "$target" &&
+      printf '\n' &&
       cat "$block"
-    } >"$tmp"
+    } >"$tmp" || operational_error "cannot render TARGET from BLOCK: $block"
     ;;
   replaced)
-    awk -v begin="$begin" -v end="$end" -v block="$block" '
+    if awk -v begin="$begin" -v end="$end" -v block="$block" '
       { marker = $0; sub(/^[[:space:]]*/, "", marker); sub(/[[:space:]]*$/, "", marker) }
       marker == begin {
-        while ((getline line < block) > 0) print line
+        while ((read_status = getline line < block) > 0) print line
+        if (read_status < 0) exit 2
         close(block)
         replacing = 1
         next
       }
       replacing && marker == end { replacing = 0; next }
       !replacing { print }
-    ' "$target" >"$tmp"
+    ' "$target" >"$tmp"; then
+      :
+    else
+      operational_error "cannot render TARGET from BLOCK: $block"
+    fi
     ;;
 esac
 
