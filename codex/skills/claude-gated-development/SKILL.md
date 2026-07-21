@@ -32,11 +32,12 @@ Use:
 "$RUNNER" adversarial --focus "Review the spec and plan at <path>; challenge the approach, assumptions, omissions, and repo fit."
 "$RUNNER" adversarial --base <commit-before-task> --focus "Review <artifact paths> and the full task diff."
 "$RUNNER" code --base <commit-before-task> --focus "Review the final implementation against <plan path>."
+"$RUNNER" code --base <commit-before-task> --since <previous-reviewed-head> --focus "Re-check the prior findings and review the committed fixes."
 ```
 
-The wrapper runs Claude and Kimi concurrently against the same captured Git scope. It reuses one persistent session per reviewer for the same Codex task and repository, keyed by `CODEX_THREAD_ID`. Set `CLAUDE_REVIEW_SESSION_KEY` to override the task key; without either key it keeps the old fresh, non-persistent behavior. Session continuity trades cold-start independence for less repeated context loading: each reviewer remains independent from the implementer, but later gates retain its earlier review context. If a saved Claude session cannot resume, the wrapper retries once with a new Claude session. A failed Kimi continuation blocks the gate.
+The wrapper runs Claude and Kimi concurrently against the same captured Git scope. It reuses one persistent session per reviewer for the same Codex task and repository, keyed by `CODEX_THREAD_ID`. Set `CLAUDE_REVIEW_SESSION_KEY` to override the task key; without either key it keeps the old fresh, non-persistent behavior. Session continuity trades cold-start independence for less repeated context loading: each reviewer remains independent from the implementer, but later gates retain its earlier review context. If a saved Claude session cannot resume, the wrapper retries once with a new Claude session and the full task bundle. Kimi resumes only by an explicit saved session ID; a failed resume blocks the current gate, clears that ID, and makes the next invocation a fresh full review. Each report must end with an explicit `PASS` or `NEEDS REVISION` verdict; `SKIPPED` or an unrecognized verdict fails the invocation and cannot advance its checkpoint.
 
-Claude uses `dontAsk` plus an explicit read-only tool surface. The wrapper precomputes the current Git scope into a temporary review bundle, removes Bash and file-edit tools, and keeps only `Read`, `Glob`, `Grep`, `Skill`, and `Agent`. Among skills it denies only `Skill(codex-gated-development)` to prevent recursive delegation; Claude may use other skills and subagents within the same read-only surface. Kimi receives a task-scoped snapshot containing tracked and unignored untracked files; symlinks and gitlinks become inert markers. On macOS, the wrapper also requires native `sandbox-exec` and runs Kimi under a profile that denies all reads and writes to the canonical live worktree and its Git directories while leaving normal network and cache access available. It clears `OLDPWD` and exported `GIT_*` variables before launch. The wrapper disables user/project/plugin hooks, skill shell expansion, and MCP servers for the Claude invocation, rejects empty review targets, and fingerprints the live repository before and after both reviewers run. Any missing or failed reviewer, unavailable native sandbox, or detected live-repository mutation fails the gate. Review calls for one task are serial; start a new Codex task or set a different session key when the task changes.
+Claude uses `dontAsk` plus an explicit read-only tool surface. The wrapper precomputes the current Git scope into a temporary review bundle, removes Bash and file-edit tools, and keeps only `Read`, `Glob`, `Grep`, `Skill`, and `Agent`. Among skills it denies only `Skill(codex-gated-development)` to prevent recursive cross-model review. Claude may still spawn its own subagents and use other skills within the same read-only surface. Kimi receives a task-scoped snapshot containing tracked and unignored untracked files; symlinks and gitlinks become inert markers. It starts with an explicit empty `--skills-dir`, which hides auto-discovered skills including `kimi-gated-development`; Kimi may still use its built-in subagents. On macOS, the wrapper also requires native `sandbox-exec` and runs Kimi under a profile that denies all reads and writes to the canonical live worktree and its Git directories while leaving normal network and cache access available. It clears `OLDPWD` and exported `GIT_*` variables before launch. The wrapper disables user/project/plugin hooks, skill shell expansion, and MCP servers for the Claude invocation, rejects empty review targets, and fingerprints the live repository before and after both reviewers run. Any missing or failed reviewer, unavailable native sandbox, or detected live-repository mutation fails the gate. Review calls for one task are serial; start a new Codex task or set a different session key when the task changes.
 
 Managed-policy hooks cannot be disabled by a session-level setting. If an untrusted managed hook is configured, do not run the reviewer against the live repository; report the gate blocked. A mutation failure detects but does not undo external changes.
 
@@ -74,10 +75,33 @@ For every dual gate:
    - Valid for this codebase: fix it.
    - Wrong, YAGNI, duplicate, or inapplicable: record a technical rebuttal; do not implement it.
    - Ambiguous or conflicting with a user decision: escalate to the user.
-4. Re-run the concurrent Claude + Kimi review against the current artifact.
+4. Commit valid fixes, then re-run the concurrent Claude + Kimi review with the saved `HEAD` as `--since`; use a full rerun when there is no new commit.
 5. Clear the gate only when both new reviewer turns see the final state and both surface no valid, unaddressed blocking finding.
 
 Any mutation after a clearing pass reopens the dual gate, including a rename, comment, constant, or cleanup. The clearing reviews must be the last operations that change the artifact before it advances.
+
+### Commit-scoped incremental reruns
+
+The first round for each review mode is a full review. Planning (`adversarial`) and final code (`code`) keep separate successful-review checkpoints, so a planning pass never narrows the first final-code review.
+
+After both reviewers finish a round, save its committed `HEAD`:
+
+```bash
+PREVIOUS_REVIEW_HEAD="$(git rev-parse HEAD)"
+```
+
+Commit the fixes before an incremental rerun. Then reuse the same task base, session key, and review mode:
+
+```bash
+"$RUNNER" code \
+  --base "$TASK_BASE" \
+  --since "$PREVIOUS_REVIEW_HEAD" \
+  --focus "Re-check the prior blocking findings and review the committed fixes."
+```
+
+An active incremental round sends the commits and binary patch from `--since` to current `HEAD`, plus a stat and file-name summary of the full task. The persistent reviewer conversation supplies the earlier findings; reviewers may still inspect affected final files, callers, and tests when needed.
+
+Use `--since` only for later rounds of the same gate. It requires a clean worktree and non-empty committed delta. The wrapper also verifies that both reviewer sessions exist, the per-mode checkpoint covers the supplied commit, the task base is unchanged, and history has not been rewritten. Missing or mismatched state falls back to a full review; invalid ancestry, an empty delta, or uncommitted changes fail before reviewers start. If a round needs only an evidence-based rebuttal and no new commit exists, omit `--since` and run a full review.
 
 ### Convergence discipline
 

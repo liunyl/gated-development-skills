@@ -41,7 +41,14 @@ if [[ -n "${FAIL_RESUME_MARKER:-}" && ! -e "$FAIL_RESUME_MARKER" ]]; then
     fi
   done
 fi
-[[ -n "${NO_LAST_MESSAGE:-}" ]] || printf 'fake claude verdict\n'
+if [[ -z "${NO_LAST_MESSAGE:-}" ]]; then
+  printf 'fake claude review\n'
+  if [[ -n "${SKIP_CLAUDE:-}" ]]; then
+    printf 'VERDICT: SKIPPED\n'
+  elif [[ -z "${UNRECOGNIZED_CLAUDE_VERDICT:-}" ]]; then
+    printf 'VERDICT: PASS\n'
+  fi
+fi
 EOF
 chmod +x "$tmp/bin/claude"
 
@@ -104,7 +111,12 @@ if [[ -n "${FAIL_KIMI_RESUME:-}" && "$*" == *--session* ]]; then
 fi
 [[ -z "${FAIL_KIMI:-}" ]] || exit 9
 if [[ -z "${NO_KIMI_LAST_MESSAGE:-}" ]]; then
-  printf 'fake kimi verdict\n'
+  printf 'fake kimi review\n'
+  if [[ -n "${SKIP_KIMI:-}" ]]; then
+    printf 'VERDICT: SKIPPED\n'
+  else
+    printf 'VERDICT: PASS\n'
+  fi
   printf 'To resume this session: kimi -r session_fake_review_id\n'
 fi
 EOF
@@ -330,6 +342,13 @@ if (cd "$repo_a" && NO_LAST_MESSAGE=1 run_review "$repo_a" no-claude-report); th
 fi
 unset NO_LAST_MESSAGE
 
+UNRECOGNIZED_CLAUDE_VERDICT=1; export UNRECOGNIZED_CLAUDE_VERDICT
+if (cd "$repo_a" && run_review "$repo_a" unrecognized-claude-verdict); then
+  unset UNRECOGNIZED_CLAUDE_VERDICT
+  fail 'unrecognized Claude verdict did not fail the gate'
+fi
+unset UNRECOGNIZED_CLAUDE_VERDICT
+
 if (cd "$repo_a" && NO_KIMI_LAST_MESSAGE=1 run_review "$repo_a" no-kimi-report); then
   unset NO_KIMI_LAST_MESSAGE
   fail 'empty Kimi report did not fail the gate'
@@ -431,6 +450,7 @@ stale_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
 printf 'STALE_SESSION_BODY\n' > "$repo_incremental/stale.txt"
 git -C "$repo_incremental" add stale.txt
 git -C "$repo_incremental" commit -qm 'add stale session fixture'
+checkpoint_before_kimi_failure="$(cat "$incremental_state")"
 FAIL_KIMI_RESUME=1; export FAIL_KIMI_RESUME
 if (cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
   --base "$changed_base" --since "$stale_previous"); then
@@ -439,6 +459,7 @@ if (cd "$repo_incremental" && run_review "$repo_incremental" incremental-task ""
 fi
 unset FAIL_KIMI_RESUME
 [[ ! -s "$kimi_incremental_state" ]] || fail 'stale Kimi resume state was not cleared'
+[[ "$(cat "$incremental_state")" == "$checkpoint_before_kimi_failure" ]] || fail 'failed Kimi resume advanced the joint review checkpoint'
 (cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
   --base "$changed_base" --since "$stale_previous")
 [[ "$(tail -n 1 "$tmp/kimi.log")" != *--session* ]] || fail 'stale Kimi session was retried instead of starting fresh'
@@ -470,5 +491,23 @@ if (cd "$repo_incremental" && run_review "$repo_incremental" "$checkpoint_failur
   fail 'checkpoint write failure did not fail the gate'
 fi
 rm -rf "$checkpoint_failure_path"
+
+skipped_key='skipped-checkpoint'
+(cd "$repo_incremental" && run_review "$repo_incremental" "$skipped_key" "" --base "$changed_base")
+skipped_hash="$(session_hash_for "$repo_incremental" "$skipped_key")"
+skipped_checkpoint="$(git -C "$repo_incremental" rev-parse --path-format=absolute --git-common-dir)/claude-review-sessions/$skipped_hash.adversarial.reviewed"
+skipped_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
+checkpoint_before_skipped="$(cat "$skipped_checkpoint")"
+printf 'SKIPPED_REVIEW_BODY\n' > "$repo_incremental/skipped.txt"
+git -C "$repo_incremental" add skipped.txt
+git -C "$repo_incremental" commit -qm 'add skipped review fixture'
+SKIP_KIMI=1; export SKIP_KIMI
+if (cd "$repo_incremental" && run_review "$repo_incremental" "$skipped_key" "" \
+  --base "$changed_base" --since "$skipped_previous"); then
+  unset SKIP_KIMI
+  fail 'SKIPPED Kimi verdict did not fail the gate'
+fi
+unset SKIP_KIMI
+[[ "$(cat "$skipped_checkpoint")" == "$checkpoint_before_skipped" ]] || fail 'SKIPPED verdict advanced the joint review checkpoint'
 
 printf 'parallel Claude and Kimi review checks passed\n'

@@ -32,8 +32,11 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
    `shared/skills/bootstrap-project/scripts/update-managed-block.sh`)
 3. During implementation, follow the selected runtime's review gate and keep
    comments and architecture documentation current under the managed
-   engineering standards. (`claude/skills/codex-gated-development/SKILL.md`;
+   engineering standards. The Codex gate performs a full first review per
+   mode, then can use a verified commit checkpoint for later incremental
+   rounds. (`claude/skills/codex-gated-development/SKILL.md`;
    `codex/skills/claude-gated-development/SKILL.md`;
+   `codex/skills/claude-gated-development/scripts/claude-review.sh`;
    `kimi/skills/kimi-gated-development/SKILL.md`;
    `shared/skills/bootstrap-project/assets/project-instructions.md`)
 4. After implementation, invoke `finish-pr` to audit evidence and draft the
@@ -52,6 +55,21 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
   `finish-pr` audits it rather than silently repairing it.
   (`shared/skills/bootstrap-project/assets/project-instructions.md`;
   `shared/skills/finish-pr/SKILL.md`)
+- Codex gate checkpoints are scoped by repository, task session, and review
+  mode. Each `<session-file>.<mode>.reviewed` record stores the resolved task
+  base and the jointly reviewed `HEAD`; Kimi's companion state stores its
+  explicit resumable session ID. A later `--since` request uses
+  `incremental-review-scope.txt` only when both sessions and that checkpoint
+  are trustworthy. Otherwise it receives the full task bundle, while dirty or
+  invalid commit ranges fail closed. Checkpoints advance only after both
+  reports contain a recognized `PASS` or `NEEDS REVISION` verdict; a skipped
+  or malformed review cannot establish incremental scope.
+  (`codex/skills/claude-gated-development/scripts/claude-review.sh`)
+- Reviewer recursion is blocked at the corresponding cross-model gate only:
+  Claude cannot load `codex-gated-development`, and Kimi receives an empty
+  explicit skills directory that hides `kimi-gated-development`. Their native
+  same-runtime subagent capabilities remain available.
+  (`codex/skills/claude-gated-development/scripts/claude-review.sh`)
 - The dependency-free engineering infrastructure test exercises shared assets,
   managed-block behavior, dogfood files, and installation documentation.
   (`tests/test-engineering-infrastructure.sh`)

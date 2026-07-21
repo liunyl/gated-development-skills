@@ -320,6 +320,8 @@ Return:
 3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
 4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
 
+End with exactly one machine-readable line: `VERDICT: PASS`, `VERDICT: NEEDS REVISION`, or `VERDICT: SKIPPED`.
+
 If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
 
 This conversation may include earlier review gates from the same task. Use that context for continuity. For an incremental review, the new patch and full-task summary are authoritative; inspect final task files when compaction or interaction risks require more context.
@@ -485,6 +487,8 @@ Return:
 3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
 4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
 
+End with exactly one machine-readable line: `VERDICT: PASS`, `VERDICT: NEEDS REVISION`, or `VERDICT: SKIPPED`.
+
 If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
 
 This conversation may include earlier review gates from the same task. Use that context for continuity, but treat this invocation's review bundle and repository snapshot files as authoritative.
@@ -520,6 +524,22 @@ if [[ "$claude_status" -eq 0 ]] && ! grep -q '[^[:space:]]' "$claude_report"; th
 fi
 if [[ "$kimi_status" -eq 0 ]] && ! grep -q '[^[:space:]]' "$kimi_report"; then
   printf 'Error: Kimi produced no review output; gate failed\n' >&2
+  kimi_status=6
+fi
+
+# A successful process is not a successful review when the reviewer skipped
+# the scope or ignored the output contract. NEEDS REVISION is valid here: it
+# records the state that produced findings so the next round can be incremental.
+has_review_verdict() {
+  tr -d '\r*' < "$1" |
+    grep -Eq '^[[:space:]]*VERDICT:[[:space:]]*(PASS|NEEDS REVISION)[[:space:]]*$'
+}
+if [[ "$claude_status" -eq 0 ]] && ! has_review_verdict "$claude_report"; then
+  printf 'Error: Claude produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
+  claude_status=6
+fi
+if [[ "$kimi_status" -eq 0 ]] && ! has_review_verdict "$kimi_report"; then
+  printf 'Error: Kimi produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
   kimi_status=6
 fi
 
