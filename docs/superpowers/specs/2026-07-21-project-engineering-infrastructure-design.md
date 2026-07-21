@@ -60,7 +60,7 @@ The managed block uses stable comments:
 <!-- END bootstrap-project: engineering-standards -->
 ```
 
-The skill uses its dependency-free `update-managed-block.sh` helper for the deterministic merge. For each instruction file:
+The skill resolves its installed directory through an explicit `BOOTSTRAP_PROJECT_SKILL_DIR` override or the known Claude/Codex/Kimi skill roots, never relative to the target repository. It then uses its dependency-free `update-managed-block.sh` helper for deterministic instruction and PR-template merges. The helper accepts a target path and a block-file path; the block file supplies one matched pair of `bootstrap-project` markers. For each instruction file:
 
 1. If the file is absent, create it with the managed block.
 2. If exactly one well-formed managed block exists, replace only that block.
@@ -100,7 +100,7 @@ The standard template contains:
 - Reviewer guide
 - Follow-up work
 
-When `.github/pull_request_template.md` is absent, bootstrap creates it from the shared asset. When one exists, bootstrap preserves it and adds only materially missing fields in a managed section.
+The shared PR asset is itself one managed block. When `.github/pull_request_template.md` is absent, bootstrap creates it from the asset. When one exists, the same tested helper preserves its unmanaged content and appends or replaces the managed standard section.
 
 ## `finish-pr` Workflow
 
@@ -111,7 +111,7 @@ The audit checks that comments and architecture documentation were already updat
 1. Runs or verifies repository-appropriate checks and records exact evidence.
 2. Builds a Conventional Commit-style subject (`type(scope): imperative summary`) and, for non-trivial changes, a body covering motivation, behavior or design decisions, and verification.
 3. Fills the repository PR template from the final diff, including risks, rollback, and reviewer entry points.
-4. Hands the audited commit message and PR body to the runtime's established branch-finishing workflow. `finish-pr` itself does not push, merge, synchronize, delete branches, or remove worktrees.
+4. Hands the audited commit message and PR body to the runtime's established branch-finishing workflow. If none is available, it stops after drafting and reports that lifecycle operations were not performed. `finish-pr` itself does not push, merge, synchronize, delete branches, or remove worktrees.
 
 The skill never claims an unrun check passed and never hides a documentation or comment gap inside the PR description.
 
@@ -123,7 +123,7 @@ Skill development follows RED-GREEN-REFACTOR with fresh subagent pressure scenar
 - Baseline without `finish-pr`: test whether an agent proceeds despite missing documentation, vague validation evidence, an incomplete commit message, or unsafe branch/worktree handling.
 - Re-run each scenario with the corresponding skill and close only observed loopholes.
 
-One shell test exercises managed-block creation, replacement, append, malformed/duplicate marker rejection, symlink rejection, and preservation of unmanaged content. It also verifies required skill metadata, expected PR sections, self-contained shared assets, repository dogfooding files, neutral wording, and installation instructions for all three runtimes. Existing gate-session tests remain unchanged and must continue to pass.
+One shell test exercises managed-block creation, replacement, append, malformed/duplicate marker rejection, symlink rejection, and preservation of unmanaged content. It also verifies that the skill references the helper through installed-skill resolution, required skill metadata, expected PR sections, self-contained shared assets, repository dogfooding files, neutral wording, and installation instructions for all three runtimes. Existing gate-session tests remain unchanged and must continue to pass.
 
 ## Non-Goals
 

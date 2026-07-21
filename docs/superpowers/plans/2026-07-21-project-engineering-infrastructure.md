@@ -64,6 +64,11 @@ grep -Fq 'name: bootstrap-project' "$BOOTSTRAP/SKILL.md"
 grep -Fq '<!-- BEGIN bootstrap-project: engineering-standards -->' "$BOOTSTRAP/assets/project-instructions.md"
 grep -Fq '<!-- END bootstrap-project: engineering-standards -->' "$BOOTSTRAP/assets/project-instructions.md"
 grep -Fq 'Source map' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'update-managed-block.sh' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'BOOTSTRAP_PROJECT_SKILL_DIR' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'CLAUDE_CONFIG_DIR' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'CODEX_HOME' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'KIMI_CODE_HOME' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Behavior before and after' "$BOOTSTRAP/assets/pull-request-template.md"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$BOOTSTRAP/SKILL.md"; then
   printf '%s\n' 'bootstrap-project contains agent-specific commands' >&2
@@ -88,9 +93,10 @@ Write a POSIX shell script with this contract:
 update-managed-block.sh TARGET BLOCK
 exit 0: TARGET was created, appended, or had one managed block replaced
 exit 2: invalid arguments, invalid BLOCK, symlink TARGET, malformed markers, or duplicate markers
+other non-zero exit: filesystem or command failure
 ```
 
-The helper must validate that `BLOCK` contains exactly one begin marker followed by exactly one end marker. It must inspect and render into a temporary file before modifying `TARGET`, preserve every line outside an existing managed block, reject symbolic links, and leave `TARGET` byte-for-byte unchanged on every validation failure. It prints the action (`created`, `appended`, `replaced`) to stdout and a concrete validation error to stderr.
+`BLOCK` is a path to a file containing the complete managed block. The helper must validate that it contains exactly one matched `<!-- BEGIN bootstrap-project: ID -->` and `<!-- END bootstrap-project: ID -->` pair in order. It must inspect and render into a temporary file in `TARGET`'s directory before modifying `TARGET`, preserve the original mode when replacing an existing file, use mode `0644` for a new file, preserve every line outside an existing managed block, reject symbolic links, and leave `TARGET` byte-for-byte unchanged on every validation failure. It prints the action (`created`, `appended`, `replaced`) to stdout and a concrete validation error to stderr.
 
 - [ ] **Step 5: Write the minimal assets**
 
@@ -111,7 +117,7 @@ The helper must validate that `BLOCK` contains exactly one begin marker followed
 ## Follow-up work
 ```
 
-The test-plan section must ask for exact commands and results. The documentation section must confirm development-time updates rather than invite deferred PR-stage writing.
+Wrap the entire PR asset in one matched `bootstrap-project: pull-request-template` managed block. The test-plan section must ask for exact commands and results. The documentation section must confirm development-time updates rather than invite deferred PR-stage writing.
 
 - [ ] **Step 6: Write the minimal skill**
 
@@ -128,10 +134,10 @@ The body must require this sequence:
 
 1. Read current instructions and inventory existing docs before edits.
 2. Inspect manifests, source/test roots, runtime entry points, durable module boundaries, persistence, and external integrations while excluding vendor/generated/cache/worktree directories.
-3. Use `scripts/update-managed-block.sh` to add or replace exactly one managed block in `AGENTS.md` and `CLAUDE.md`; stop on malformed/duplicate markers or symbolic links, and preserve/report contradictory unmanaged instructions while continuing only non-conflicting work.
+3. Resolve the installed skill directory from `BOOTSTRAP_PROJECT_SKILL_DIR` or the first existing `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, `${CODEX_HOME:-$HOME/.codex}`, `${KIMI_CODE_HOME:-$HOME/.kimi-code}` candidate; fail closed if none contains the helper. Invoke `<skill-dir>/scripts/update-managed-block.sh TARGET BLOCK` for `AGENTS.md` and `CLAUDE.md`; stop on malformed/duplicate markers or symbolic links, and preserve/report contradictory unmanaged instructions while continuing only non-conflicting work.
 4. Add a missing architecture set inside an existing `docs/` taxonomy. Create `docs/README.md`, `docs/architecture/README.md`, and `docs/architecture/01-overview.md` only when no equivalent exists; add numbered subsystem docs only for evidenced durable boundaries.
 5. Require every architecture document to contain a `Source map` table with repository-relative paths and label unknowns explicitly.
-6. Create the shared PR template when absent; when present, preserve it and add only materially missing sections inside a managed block.
+6. Use the same installed helper and managed PR asset to create, append, or replace the standard section in `.github/pull_request_template.md` without modifying unmanaged content.
 7. Review the final diff for accidental overwrites and unsupported claims, then run repository checks that cover changed files.
 
 Include a quick-reference table and observed RED-phase rationalization counters. Keep the skill under 250 lines and reference its two assets and merge helper rather than duplicating them.
@@ -153,7 +159,7 @@ git add shared/skills/bootstrap-project tests/test-engineering-infrastructure.sh
 git commit -m "feat: add bootstrap-project engineering skill"
 ```
 
-### Task 2: Blocking `finish-pr` audit and publication skill
+### Task 2: Blocking `finish-pr` audit and drafting skill
 
 **Files:**
 - Create: `shared/skills/finish-pr/SKILL.md`
@@ -187,6 +193,7 @@ grep -Fq 'name: finish-pr' "$FINISH/SKILL.md"
 grep -Fq 'type(scope): imperative summary' "$FINISH/SKILL.md"
 grep -Fq 'blocks the PR' "$FINISH/SKILL.md"
 grep -Fq 'finishing-a-development-branch' "$FINISH/SKILL.md"
+grep -Fq 'stops after drafting' "$FINISH/SKILL.md"
 grep -Fq 'finish-pr' "$ROOT/claude/skills/codex-gated-development/SKILL.md"
 grep -Fq 'finish-pr' "$ROOT/codex/skills/claude-gated-development/SKILL.md"
 grep -Fq 'finish-pr' "$ROOT/kimi/skills/kimi-gated-development/SKILL.md"
@@ -221,12 +228,12 @@ The body must require this sequence:
 4. Record exact commands/results and state every relevant check not run.
 5. Build `type(scope): imperative summary`; for non-trivial changes add motivation, behavior/design decisions and tradeoffs, verification, and issue references when applicable.
 6. Fill the PR template from the final diff with risk, rollback, and reviewer entry points.
-7. Keep this skill read-only with respect to remotes and branch/worktree lifecycle. Hand the audited artifacts to `superpowers:finishing-a-development-branch` where available, or the runtime's established equivalent; never duplicate its mutation, ordering, verification, or provenance logic.
+7. Keep this skill read-only with respect to remotes and branch/worktree lifecycle. Hand the audited artifacts to `superpowers:finishing-a-development-branch` where available, or the runtime's established equivalent; never duplicate its mutation, ordering, verification, or provenance logic. If no established finishing workflow is available, the skill stops after drafting, returns the artifacts, and explicitly reports that lifecycle operations were not performed.
 8. Re-derive the final message after any implementation or documentation mutation.
 
 Include a quick-reference table and only the rationalization counters observed in the RED scenario. Keep the skill under 250 lines.
 
-Update the Finish row in each existing gate skill so gated development calls `finish-pr` for audit/drafting before the runtime's normal branch-finishing workflow. Do not otherwise change gate thresholds or reviewer behavior.
+Update the existing Finish rows in the Claude- and Codex-side gate skills so they call `finish-pr` for audit/drafting before the runtime's normal branch-finishing workflow. Kimi's gate has no Finish row, so add one concise finish handoff after its existing final-gate row. Do not otherwise change gate thresholds or reviewer behavior.
 
 - [ ] **Step 4: Run the test and verify GREEN**
 
