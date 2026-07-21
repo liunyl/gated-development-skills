@@ -320,7 +320,7 @@ Return:
 3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
 4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
 
-End with exactly one machine-readable line: `VERDICT: PASS`, `VERDICT: NEEDS REVISION`, or `VERDICT: SKIPPED`.
+End with exactly one machine-readable line: VERDICT: PASS, VERDICT: NEEDS REVISION, or VERDICT: SKIPPED.
 
 If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
 
@@ -487,7 +487,7 @@ Return:
 3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
 4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
 
-End with exactly one machine-readable line: `VERDICT: PASS`, `VERDICT: NEEDS REVISION`, or `VERDICT: SKIPPED`.
+End with exactly one machine-readable line: VERDICT: PASS, VERDICT: NEEDS REVISION, or VERDICT: SKIPPED.
 
 If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
 

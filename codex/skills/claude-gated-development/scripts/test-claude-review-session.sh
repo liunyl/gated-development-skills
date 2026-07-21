@@ -18,6 +18,7 @@ if [[ -t 0 || -p /dev/stdin ]]; then
   exit 97
 fi
 prompt="$1"
+[[ "$prompt" == *'End with exactly one machine-readable line: VERDICT: PASS'* ]] || exit 96
 bundle_path="$(printf '%s\n' "$prompt" | sed -n 's/^Precomputed review bundle: //p')"
 [[ -n "$bundle_path" && -f "$bundle_path" ]] || exit 98
 call_no="$(($(wc -l < "$CLAUDE_LOG") + 1))"
@@ -94,13 +95,16 @@ for arg in "$@"; do
 done
 [[ "$*" == *"$PWD/repo"* ]] || exit 11
 skills_dir=""
+review_prompt=""
 previous=""
 for arg in "$@"; do
   [[ "$previous" != "--skills-dir" ]] || skills_dir="$arg"
+  [[ "$previous" != "-p" ]] || review_prompt="$arg"
   previous="$arg"
 done
 [[ -d "$skills_dir" ]] || exit 24
 [[ -z "$(find "$skills_dir" -mindepth 1 -print -quit)" ]] || exit 25
+[[ "$review_prompt" == *'End with exactly one machine-readable line: VERDICT: PASS'* ]] || exit 26
 call_no="$(($(wc -l < "$KIMI_LOG") + 1))"
 cp "$PWD/review-scope.txt" "$BUNDLE_CAPTURE/kimi-$call_no.txt"
 printf 'CALL\tcwd=%q' "$PWD" >> "$KIMI_LOG"
