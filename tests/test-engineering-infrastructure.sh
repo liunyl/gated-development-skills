@@ -69,6 +69,27 @@ cmp "$TMP/replace.md" "$TMP/replace.expected"
 test "$(grep -Fc '<!-- BEGIN bootstrap-project: engineering-standards -->' "$TMP/replace.md")" -eq 1
 test "$(grep -Fc '<!-- END bootstrap-project: engineering-standards -->' "$TMP/replace.md")" -eq 1
 
+# Whitespace accepted around BLOCK markers is accepted around TARGET markers too.
+printf '%s\n' \
+  'Local prefix.' \
+  '  <!-- BEGIN bootstrap-project: engineering-standards -->   ' \
+  'Old content.' \
+  '  <!-- END bootstrap-project: engineering-standards -->   ' \
+  'Local suffix.' >"$TMP/whitespace.md"
+{
+  printf '%s\n' 'Local prefix.'
+  sed -n 'p' "$BLOCK"
+  printf '%s\n' 'Local suffix.'
+} >"$TMP/whitespace.expected"
+whitespace_action=$($MERGE "$TMP/whitespace.md" "$BLOCK")
+if test "$whitespace_action" != replaced; then
+  printf 'whitespace-marker target: expected replaced, got %s\n' "$whitespace_action" >&2
+  exit 1
+fi
+cmp "$TMP/whitespace.md" "$TMP/whitespace.expected"
+test "$(grep -Ec '^[[:space:]]*<!-- BEGIN bootstrap-project: engineering-standards -->[[:space:]]*$' "$TMP/whitespace.md")" -eq 1
+test "$(grep -Ec '^[[:space:]]*<!-- END bootstrap-project: engineering-standards -->[[:space:]]*$' "$TMP/whitespace.md")" -eq 1
+
 # Malformed and duplicate matching markers fail without changing the target.
 cat >"$TMP/malformed.md" <<'EOF'
 Keep me.

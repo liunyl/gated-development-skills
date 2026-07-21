@@ -33,8 +33,9 @@ test "$begin_id" = "$end_id" || fail "invalid BLOCK: marker IDs do not match ($b
 begin="<!-- BEGIN bootstrap-project: $begin_id -->"
 end="<!-- END bootstrap-project: $begin_id -->"
 awk -v begin="$begin" -v end="$end" '
-  $0 == begin { if (seen_begin || seen_end) exit 1; seen_begin = 1 }
-  $0 == end { if (!seen_begin || seen_end) exit 1; seen_end = 1 }
+  { marker = $0; sub(/^[[:space:]]*/, "", marker); sub(/[[:space:]]*$/, "", marker) }
+  marker == begin { if (seen_begin || seen_end) exit 1; seen_begin = 1 }
+  marker == end { if (!seen_begin || seen_end) exit 1; seen_end = 1 }
   END { if (!seen_begin || !seen_end) exit 1 }
 ' "$block" || fail 'invalid BLOCK: markers must form one ordered pair'
 
@@ -42,8 +43,9 @@ action=created
 if test -e "$target"; then
   test -f "$target" || fail "invalid TARGET: $target is not a regular file"
   counts=$(awk -v begin="$begin" -v end="$end" '
-    $0 == begin { begins++; if (ends) reversed = 1 }
-    $0 == end { ends++; if (!begins) reversed = 1 }
+    { marker = $0; sub(/^[[:space:]]*/, "", marker); sub(/[[:space:]]*$/, "", marker) }
+    marker == begin { begins++; if (ends) reversed = 1 }
+    marker == end { ends++; if (!begins) reversed = 1 }
     END { print begins + 0, ends + 0, reversed + 0 }
   ' "$target")
   set -- $counts
@@ -76,13 +78,14 @@ case $action in
   replaced)
     cp -p "$target" "$tmp"
     awk -v begin="$begin" -v end="$end" -v block="$block" '
-      $0 == begin {
+      { marker = $0; sub(/^[[:space:]]*/, "", marker); sub(/[[:space:]]*$/, "", marker) }
+      marker == begin {
         while ((getline line < block) > 0) print line
         close(block)
         replacing = 1
         next
       }
-      replacing && $0 == end { replacing = 0; next }
+      replacing && marker == end { replacing = 0; next }
       !replacing { print }
     ' "$target" >"$tmp"
     ;;
