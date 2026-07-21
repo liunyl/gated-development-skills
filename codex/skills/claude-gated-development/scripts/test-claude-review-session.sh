@@ -519,5 +519,6 @@ if (cd "$repo_incremental" && run_review "$repo_incremental" "$skipped_key" "" \
 fi
 unset SKIP_KIMI EARLY_KIMI_PASS
 [[ "$(cat "$skipped_checkpoint")" == "$checkpoint_before_skipped" ]] || fail 'SKIPPED verdict advanced the joint review checkpoint'
+! grep -Fq "ambiguous argument 'HEAD'" "$tmp/review.stderr" || fail 'unborn working-tree review emitted a raw HEAD error'
 
 printf 'parallel Claude and Kimi review checks passed\n'

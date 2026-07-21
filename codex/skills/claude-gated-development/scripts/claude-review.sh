@@ -289,7 +289,7 @@ fi
 
 repo_fingerprint() {
   {
-    git -C "$repo_root" rev-parse HEAD
+    git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unborn HEAD\n'
     git -C "$repo_root" status --porcelain=v1 -z --untracked-files=all
     git -C "$repo_root" diff --binary
     git -C "$repo_root" diff --cached --binary
