@@ -134,7 +134,7 @@ The body must require this sequence:
 
 1. Read current instructions and inventory existing docs before edits.
 2. Inspect manifests, source/test roots, runtime entry points, durable module boundaries, persistence, and external integrations while excluding vendor/generated/cache/worktree directories.
-3. Resolve the installed skill directory from `BOOTSTRAP_PROJECT_SKILL_DIR` or the first `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, `${CODEX_HOME:-$HOME/.codex}`, `${KIMI_CODE_HOME:-$HOME/.kimi-code}` candidate that contains `skills/bootstrap-project/scripts/update-managed-block.sh`; fail closed if none contains it. Invoke `<skill-dir>/scripts/update-managed-block.sh TARGET BLOCK` for `AGENTS.md` and `CLAUDE.md`; stop on malformed/duplicate markers or symbolic links, and preserve/report contradictory unmanaged instructions while continuing only non-conflicting work.
+3. Resolve the installed skill directory from a trusted absolute path supplied by the skill loader/task context, `BOOTSTRAP_PROJECT_SKILL_DIR`, or the first `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, `${CODEX_HOME:-$HOME/.codex}`, `${KIMI_CODE_HOME:-$HOME/.kimi-code}` candidate that contains `skills/bootstrap-project/scripts/update-managed-block.sh`; fail closed if none contains it. Assign the resolved path to `BOOTSTRAP_PROJECT_SKILL_DIR` in the shell command before invoking `$BOOTSTRAP_PROJECT_SKILL_DIR/scripts/update-managed-block.sh TARGET BLOCK` for `AGENTS.md` and `CLAUDE.md`; stop on malformed/duplicate markers or symbolic links, and preserve/report contradictory unmanaged instructions while continuing only non-conflicting work.
 4. Add a missing architecture set inside an existing `docs/` taxonomy. Create `docs/README.md`, `docs/architecture/README.md`, and `docs/architecture/01-overview.md` only when no equivalent exists; add numbered subsystem docs only for evidenced durable boundaries.
 5. Require every architecture document to contain a `Source map` table with repository-relative paths and label unknowns explicitly.
 6. Use the same installed helper and managed PR asset to create, append, or replace the standard section in `.github/pull_request_template.md` without modifying unmanaged content.
@@ -150,7 +150,7 @@ Expected: exit 0 with `engineering infrastructure checks passed`.
 
 - [ ] **Step 8: Pressure-test the skill**
 
-Reset the fixture, resolve `<absolute-skill-path>` from the current repository root, and dispatch a fresh subagent with `BOOTSTRAP_PROJECT_SKILL_DIR=<absolute-skill-path>` plus `Use $bootstrap-project at <absolute-skill-path>` prepended to the Step 1 scenario. Verify it preserves custom rules, cites actual source paths, labels unknowns, and avoids syntax-restating comments. Later re-runs use the same override. If it finds a new loophole, add only the specific counter and re-run the same scenario.
+Reset the fixture, resolve `<absolute-skill-path>` from the current repository root, and prepend this instruction to the Step 1 scenario: `Use $bootstrap-project at <absolute-skill-path>. Treat that trusted path as the skill directory and assign BOOTSTRAP_PROJECT_SKILL_DIR=<absolute-skill-path> in each shell command that invokes its helper.` Verify it preserves custom rules, cites actual source paths, labels unknowns, and avoids syntax-restating comments. Later re-runs use the same instruction. If it finds a new loophole, add only the specific counter and re-run the same scenario.
 
 - [ ] **Step 9: Commit Task 1**
 
@@ -182,7 +182,7 @@ This is real work. You spent three hours on this change, CI is green, and the re
 
 Record whether it proceeds despite documentation gaps, invents test evidence, writes only a vague one-line commit, or implements unsafe branch/worktree cleanup itself.
 
-- [ ] **Step 2: Extend the contract test and verify RED**
+- [ ] **Step 2: Insert the contract checks and verify RED**
 
 Append:
 
@@ -243,7 +243,7 @@ Expected: exit 0 with `engineering infrastructure checks passed`.
 
 - [ ] **Step 5: Pressure-test the skill**
 
-Reset the fixture, dispatch a fresh subagent with `Use $finish-pr at <absolute-skill-path>` prepended to Step 1, and verify it blocks on the missing documentation, reports exact evidence, and delegates rather than implementing branch/worktree lifecycle operations. Close only newly observed loopholes, then re-run.
+Reset the fixture, dispatch a fresh subagent with `Use $finish-pr at <absolute-skill-path>` prepended to Step 1, and verify it blocks on the missing documentation, reports exact evidence, and either delegates or stops after drafting while never performing branch/worktree lifecycle operations itself. Close only newly observed loopholes, then re-run.
 
 - [ ] **Step 6: Commit Task 2**
 
@@ -270,7 +270,7 @@ git commit -m "feat: add finish-pr delivery skill"
 
 - [ ] **Step 1: Extend the contract test and verify RED**
 
-Append checks for every dogfood file, require the PR template headings in the specified order, extract and compare the managed blocks in `AGENTS.md` and `CLAUDE.md` against the shared instruction asset, require `Source map` in the overview, require README mentions of both new skill names and all three destination directories, and keep the existing final success line:
+Append checks for every dogfood file, require the PR template's managed begin/end markers and headings in the specified order, extract and compare the managed blocks in `AGENTS.md` and `CLAUDE.md` against the shared instruction asset, require `Source map` in the overview, require README mentions of both new skill names and all three destination directories, and keep the existing final success line:
 
 ```sh
 printf '%s\n' 'engineering infrastructure checks passed'

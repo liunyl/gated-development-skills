@@ -60,7 +60,7 @@ The managed block uses stable comments:
 <!-- END bootstrap-project: engineering-standards -->
 ```
 
-The skill resolves its installed directory through an explicit `BOOTSTRAP_PROJECT_SKILL_DIR` override or the known Claude/Codex/Kimi skill roots, never relative to the target repository. It then uses its dependency-free `update-managed-block.sh` helper for deterministic instruction and PR-template merges. The helper accepts a target path and a block-file path; the block file supplies one matched pair of `bootstrap-project` markers. For each instruction file:
+The skill resolves its installed directory from a trusted absolute path supplied by the skill loader or task context, an explicit `BOOTSTRAP_PROJECT_SKILL_DIR` override, or the known Claude/Codex/Kimi skill roots—never relative to the target repository. It then uses its dependency-free `update-managed-block.sh` helper for deterministic instruction and PR-template merges. The helper accepts a target path and a block-file path; the block file supplies one matched pair of `bootstrap-project` markers. For each instruction file:
 
 1. If the file is absent, create it with the managed block.
 2. If exactly one well-formed managed block exists, replace only that block.
