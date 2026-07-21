@@ -93,7 +93,7 @@ if test -e "$target"; then
   if counts=$(awk -v begin="$begin" -v end="$end" -v id="$begin_id" '
     function matches_id(marker, keyword, id, offset, relative, start, rest, first, opener, project) {
       opener = "<!--"
-      project = "bootstrap-project:"
+      project = "bootstrap-project"
       offset = 1
       while ((relative = index(substr(marker, offset), opener))) {
         start = offset + relative - 1
@@ -111,6 +111,14 @@ if test -e "$target"; then
         }
         rest = substr(rest, length(project) + 1)
         sub(/^[[:space:]]*/, "", rest)
+        if (substr(rest, 1, 1) != ":") {
+          offset = start + length(opener)
+          continue
+        }
+        while (substr(rest, 1, 1) == ":") {
+          rest = substr(rest, 2)
+          sub(/^[[:space:]]*/, "", rest)
+        }
         if (substr(rest, 1, length(id)) != id) {
           offset = start + length(opener)
           continue

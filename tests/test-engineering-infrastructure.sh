@@ -260,6 +260,28 @@ assert_rejected missing-colon-whitespace 2 "$MALFORMED_TARGET_ERROR" \
   "$MERGE" "$TMP/missing-colon-whitespace.md" "$BLOCK"
 cmp "$TMP/missing-colon-whitespace.md" "$TMP/missing-colon-whitespace.before"
 
+printf '%b\n' \
+  'Keep pre-colon whitespace unchanged.' \
+  '<!-- BEGIN bootstrap-project : engineering-standards -->' \
+  'Untrusted content.' \
+  '<!-- END bootstrap-project\t: engineering-standards -->' \
+  >"$TMP/pre-colon-whitespace.md"
+cp "$TMP/pre-colon-whitespace.md" "$TMP/pre-colon-whitespace.before"
+assert_rejected pre-colon-whitespace 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/pre-colon-whitespace.md" "$BLOCK"
+cmp "$TMP/pre-colon-whitespace.md" "$TMP/pre-colon-whitespace.before"
+
+cat >"$TMP/repeated-colon.md" <<'EOF'
+Keep repeated colons unchanged.
+<!-- BEGIN bootstrap-project :: engineering-standards -->
+Untrusted content.
+<!-- END bootstrap-project :: engineering-standards -->
+EOF
+cp "$TMP/repeated-colon.md" "$TMP/repeated-colon.before"
+assert_rejected repeated-colon 2 "$MALFORMED_TARGET_ERROR" \
+  "$MERGE" "$TMP/repeated-colon.md" "$BLOCK"
+cmp "$TMP/repeated-colon.md" "$TMP/repeated-colon.before"
+
 cat >"$TMP/duplicate.md" <<'EOF'
 <!-- BEGIN bootstrap-project: engineering-standards -->
 First.
