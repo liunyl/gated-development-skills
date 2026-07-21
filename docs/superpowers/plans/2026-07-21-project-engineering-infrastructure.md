@@ -4,9 +4,9 @@
 
 **Goal:** Add shared `bootstrap-project` and `finish-pr` skills, standard engineering assets, and dogfood documentation for Claude Code, Codex, and Kimi Code.
 
-**Architecture:** Keep both new skills under `shared/skills/` so the same folders install unchanged into all three runtimes. `bootstrap-project` owns evidence-grounded architecture initialization and delegates deterministic instruction merging to one tested POSIX helper. `finish-pr` audits the completed diff and prepares commit/PR content, then hands branch lifecycle operations to established finishing workflows. A single dependency-free shell check protects the required contracts.
+**Architecture:** Keep both new skills under `shared/skills/` so the same folders install unchanged into all three runtimes. `bootstrap-project` owns evidence-grounded architecture initialization and delegates deterministic instruction merging to one tested dependency-free `/bin/sh` helper. `finish-pr` audits the completed diff and prepares commit/PR content, then hands branch lifecycle operations to established finishing workflows. A single dependency-free shell check protects the required contracts.
 
-**Tech Stack:** Markdown skills and templates, POSIX-compatible shell checks, Git.
+**Tech Stack:** Markdown skills and templates, dependency-free `/bin/sh` checks requiring standard macOS/Linux `mktemp` and `stat`, Git.
 
 ## Global Constraints
 
@@ -52,7 +52,7 @@ Create an executable shell script that starts with:
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 BOOTSTRAP="$ROOT/shared/skills/bootstrap-project"
 MERGE="$BOOTSTRAP/scripts/update-managed-block.sh"
 
@@ -87,7 +87,7 @@ Expected: non-zero exit because `shared/skills/bootstrap-project/SKILL.md` does 
 
 - [ ] **Step 4: Implement the managed-block helper**
 
-Write a POSIX shell script with this contract:
+Write a dependency-free `/bin/sh` helper requiring standard macOS/Linux `mktemp` and `stat` with this contract:
 
 ```text
 update-managed-block.sh TARGET BLOCK

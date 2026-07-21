@@ -40,16 +40,24 @@ awk -v begin="$begin" -v end="$end" '
 ' "$block" || fail 'invalid BLOCK: markers must form one ordered pair'
 
 action=created
+mode=
 if test -e "$target"; then
   test -f "$target" || fail "invalid TARGET: $target is not a regular file"
+  mode=$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target") ||
+    fail "invalid TARGET: cannot read mode for $target"
+  # A matching-ID marker with extra text is ambiguous; fail closed rather than append beside it.
   counts=$(awk -v begin="$begin" -v end="$end" '
     { marker = $0; sub(/^[[:space:]]*/, "", marker); sub(/[[:space:]]*$/, "", marker) }
+    index($0, begin) { raw_begins++ }
+    index($0, end) { raw_ends++ }
     marker == begin { begins++; if (ends) reversed = 1 }
     marker == end { ends++; if (!begins) reversed = 1 }
-    END { print begins + 0, ends + 0, reversed + 0 }
+    END { print begins + 0, ends + 0, reversed + 0, raw_begins + 0, raw_ends + 0 }
   ' "$target")
   set -- $counts
-  if test "$1" -eq 0 && test "$2" -eq 0; then
+  if test "$4" -ne "$1" || test "$5" -ne "$2"; then
+    fail "invalid TARGET: malformed or duplicate markers for $begin_id"
+  elif test "$1" -eq 0 && test "$2" -eq 0; then
     action=appended
   elif test "$1" -eq 1 && test "$2" -eq 1 && test "$3" -eq 0; then
     action=replaced
@@ -58,17 +66,16 @@ if test -e "$target"; then
   fi
 fi
 
-dir=$(dirname -- "$target")
+dir=$(dirname "$target")
+# Render beside the target, then restore its mode before atomic replacement so failures leave it intact.
 tmp=$(mktemp "$dir/.bootstrap-project.XXXXXX")
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
 case $action in
   created)
     cat "$block" >"$tmp"
-    chmod 0644 "$tmp"
     ;;
   appended)
-    cp -p "$target" "$tmp"
     {
       cat "$target"
       printf '\n'
@@ -76,7 +83,6 @@ case $action in
     } >"$tmp"
     ;;
   replaced)
-    cp -p "$target" "$tmp"
     awk -v begin="$begin" -v end="$end" -v block="$block" '
       { marker = $0; sub(/^[[:space:]]*/, "", marker); sub(/[[:space:]]*$/, "", marker) }
       marker == begin {
@@ -90,6 +96,12 @@ case $action in
     ' "$target" >"$tmp"
     ;;
 esac
+
+if test "$action" = created; then
+  chmod 0644 "$tmp"
+else
+  chmod "$mode" "$tmp"
+fi
 
 mv "$tmp" "$target"
 trap - EXIT HUP INT TERM

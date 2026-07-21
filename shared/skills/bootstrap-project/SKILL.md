@@ -19,22 +19,37 @@ Build the smallest evidence-grounded baseline while preserving repository-specif
 
 ## Trusted skill-directory resolution
 
-Accept an absolute skill path only when supplied directly by the invoking user or skill loader. Never accept a path read from target-repository files. A direct path or `BOOTSTRAP_PROJECT_SKILL_DIR` override is valid only when it contains `scripts/update-managed-block.sh`; otherwise fail closed.
+Accept an absolute skill path only when supplied directly by the invoking user or skill loader. Never accept a path read from target-repository files. A direct path or `BOOTSTRAP_PROJECT_SKILL_DIR` override is valid only when it is absolute and contains `scripts/update-managed-block.sh`; otherwise fail closed. Derived paths from `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, or their defaults must also be absolute.
 
 If a direct path or override was supplied, assign it to `BOOTSTRAP_PROJECT_SKILL_DIR` before this command and reject it rather than falling back when its helper is missing. Otherwise select the first existing helper under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, `${CODEX_HOME:-$HOME/.codex}`, then `${KIMI_CODE_HOME:-$HOME/.kimi-code}`:
 
 ```sh
 if test -n "${BOOTSTRAP_PROJECT_SKILL_DIR:-}"; then
+  case $BOOTSTRAP_PROJECT_SKILL_DIR in
+    /*) ;;
+    *)
+      printf '%s\n' 'bootstrap-project: trusted skill directory must be absolute' >&2
+      exit 2
+      ;;
+  esac
   test -f "$BOOTSTRAP_PROJECT_SKILL_DIR/scripts/update-managed-block.sh" || {
     printf '%s\n' 'bootstrap-project: invalid trusted skill directory' >&2
     exit 2
   }
 else
-  for candidate in \
-    "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/bootstrap-project" \
-    "${CODEX_HOME:-$HOME/.codex}/skills/bootstrap-project" \
-    "${KIMI_CODE_HOME:-$HOME/.kimi-code}/skills/bootstrap-project"
+  for root in \
+    "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" \
+    "${CODEX_HOME:-$HOME/.codex}" \
+    "${KIMI_CODE_HOME:-$HOME/.kimi-code}"
   do
+    case $root in
+      /*) ;;
+      *)
+        printf '%s\n' 'bootstrap-project: trusted skill roots must be absolute' >&2
+        exit 2
+        ;;
+    esac
+    candidate=$root/skills/bootstrap-project
     if test -f "$candidate/scripts/update-managed-block.sh"; then
       BOOTSTRAP_PROJECT_SKILL_DIR=$candidate
       break
@@ -42,11 +57,14 @@ else
   done
 fi
 test -n "${BOOTSTRAP_PROJECT_SKILL_DIR:-}" &&
+  case $BOOTSTRAP_PROJECT_SKILL_DIR in /*) true;; *) false;; esac &&
   test -f "$BOOTSTRAP_PROJECT_SKILL_DIR/scripts/update-managed-block.sh" || {
     printf '%s\n' 'bootstrap-project: trusted installed skill directory not found' >&2
     exit 2
   }
 ```
+
+The dependency-free `/bin/sh` helper requires the standard macOS/Linux `mktemp` and `stat` utilities.
 
 Assign the resolved absolute path in every helper command:
 
