@@ -152,4 +152,80 @@ if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$FINISH/SKILL.md"; then
   exit 1
 fi
 
+AGENTS="$ROOT/AGENTS.md"
+CLAUDE="$ROOT/CLAUDE.md"
+PR_TEMPLATE="$ROOT/.github/pull_request_template.md"
+DOCS_INDEX="$ROOT/docs/README.md"
+ARCHITECTURE_INDEX="$ROOT/docs/architecture/README.md"
+OVERVIEW="$ROOT/docs/architecture/01-overview.md"
+
+for file in \
+  "$AGENTS" \
+  "$CLAUDE" \
+  "$PR_TEMPLATE" \
+  "$DOCS_INDEX" \
+  "$ARCHITECTURE_INDEX" \
+  "$OVERVIEW"
+do
+  test -f "$file"
+done
+
+extract_managed_block() {
+  source=$1
+  destination=$2
+  test "$(grep -Fc '<!-- BEGIN bootstrap-project: engineering-standards -->' "$source")" -eq 1
+  test "$(grep -Fc '<!-- END bootstrap-project: engineering-standards -->' "$source")" -eq 1
+  sed -n \
+    '/^<!-- BEGIN bootstrap-project: engineering-standards -->$/,/^<!-- END bootstrap-project: engineering-standards -->$/p' \
+    "$source" >"$destination"
+}
+
+extract_managed_block "$AGENTS" "$TMP/agents-managed.md"
+extract_managed_block "$CLAUDE" "$TMP/claude-managed.md"
+cmp "$TMP/agents-managed.md" "$BLOCK"
+cmp "$TMP/claude-managed.md" "$BLOCK"
+grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$AGENTS"
+grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$CLAUDE"
+
+test "$(grep -Fc '<!-- BEGIN bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
+test "$(grep -Fc '<!-- END bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
+previous_line=0
+for section in \
+  '<!-- BEGIN bootstrap-project: pull-request-template -->' \
+  '## Context' \
+  '## Behavior before and after' \
+  '## Implementation' \
+  '## Design decisions and alternatives' \
+  '## Documentation and comments' \
+  '## Test plan' \
+  '## Risk assessment' \
+  '## Rollback plan' \
+  '## Reviewer guide' \
+  '## Follow-up work' \
+  '<!-- END bootstrap-project: pull-request-template -->'
+do
+  test "$(grep -Fxc "$section" "$PR_TEMPLATE")" -eq 1
+  line=$(grep -nFx "$section" "$PR_TEMPLATE" | cut -d: -f1)
+  test "$line" -gt "$previous_line"
+  previous_line=$line
+done
+
+grep -Fq 'Source map' "$OVERVIEW"
+for source_path in \
+  'claude/skills/codex-gated-development/' \
+  'codex/skills/claude-gated-development/' \
+  'kimi/skills/kimi-gated-development/' \
+  'shared/skills/bootstrap-project/' \
+  'shared/skills/finish-pr/' \
+  'tests/test-engineering-infrastructure.sh'
+do
+  grep -Fq "$source_path" "$OVERVIEW"
+done
+
+grep -Fq 'bootstrap-project' "$ROOT/README.md"
+grep -Fq 'finish-pr' "$ROOT/README.md"
+grep -Fq '.claude/skills' "$ROOT/README.md"
+grep -Fq '.codex/skills' "$ROOT/README.md"
+grep -Fq '.kimi-code/skills' "$ROOT/README.md"
+
 printf '%s\n' 'engineering infrastructure checks passed'
