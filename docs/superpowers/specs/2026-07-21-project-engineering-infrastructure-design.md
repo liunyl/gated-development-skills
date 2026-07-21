@@ -69,7 +69,7 @@ The skill resolves its installed directory through an explicit `BOOTSTRAP_PROJEC
 5. If existing unmanaged instructions contradict the shared standards, preserve and report the conflicting text; continue only with non-conflicting bootstrap steps.
 6. If an instruction path is a symbolic link, stop and report it rather than replacing or dereferencing it implicitly.
 
-The same preservation rule applies to existing documentation and PR templates: retain repository-specific material and add only missing shared requirements.
+Existing documentation retains repository-specific material and gains only missing shared requirements. The PR template is the deliberate exception: its complete shared section is one managed block, so an existing unmanaged template may cover some of the same topics while remaining untouched.
 
 ## Evidence-Grounded Architecture Bootstrap
 

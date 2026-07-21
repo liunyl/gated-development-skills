@@ -96,7 +96,7 @@ exit 2: invalid arguments, invalid BLOCK, symlink TARGET, malformed markers, or 
 other non-zero exit: filesystem or command failure
 ```
 
-`BLOCK` is a path to a file containing the complete managed block. The helper must validate that it contains exactly one matched `<!-- BEGIN bootstrap-project: ID -->` and `<!-- END bootstrap-project: ID -->` pair in order. It must inspect and render into a temporary file in `TARGET`'s directory before modifying `TARGET`, preserve the original mode when replacing an existing file, use mode `0644` for a new file, preserve every line outside an existing managed block, reject symbolic links, and leave `TARGET` byte-for-byte unchanged on every validation failure. It prints the action (`created`, `appended`, `replaced`) to stdout and a concrete validation error to stderr.
+`BLOCK` is a path to a file containing the complete managed block. The helper must validate that it contains exactly one matched `<!-- BEGIN bootstrap-project: ID -->` and `<!-- END bootstrap-project: ID -->` pair in order, and only markers matching that ID count when inspecting `TARGET`. It must inspect and render into a temporary file in `TARGET`'s directory before modifying `TARGET`, preserve the original mode when replacing an existing file, use mode `0644` for a new file, preserve every line outside an existing managed block, reject symbolic links, and leave `TARGET` byte-for-byte unchanged on every validation failure. It prints the action (`created`, `appended`, `replaced`) to stdout and a concrete validation error to stderr.
 
 - [ ] **Step 5: Write the minimal assets**
 
@@ -134,7 +134,7 @@ The body must require this sequence:
 
 1. Read current instructions and inventory existing docs before edits.
 2. Inspect manifests, source/test roots, runtime entry points, durable module boundaries, persistence, and external integrations while excluding vendor/generated/cache/worktree directories.
-3. Resolve the installed skill directory from `BOOTSTRAP_PROJECT_SKILL_DIR` or the first existing `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, `${CODEX_HOME:-$HOME/.codex}`, `${KIMI_CODE_HOME:-$HOME/.kimi-code}` candidate; fail closed if none contains the helper. Invoke `<skill-dir>/scripts/update-managed-block.sh TARGET BLOCK` for `AGENTS.md` and `CLAUDE.md`; stop on malformed/duplicate markers or symbolic links, and preserve/report contradictory unmanaged instructions while continuing only non-conflicting work.
+3. Resolve the installed skill directory from `BOOTSTRAP_PROJECT_SKILL_DIR` or the first `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`, `${CODEX_HOME:-$HOME/.codex}`, `${KIMI_CODE_HOME:-$HOME/.kimi-code}` candidate that contains `skills/bootstrap-project/scripts/update-managed-block.sh`; fail closed if none contains it. Invoke `<skill-dir>/scripts/update-managed-block.sh TARGET BLOCK` for `AGENTS.md` and `CLAUDE.md`; stop on malformed/duplicate markers or symbolic links, and preserve/report contradictory unmanaged instructions while continuing only non-conflicting work.
 4. Add a missing architecture set inside an existing `docs/` taxonomy. Create `docs/README.md`, `docs/architecture/README.md`, and `docs/architecture/01-overview.md` only when no equivalent exists; add numbered subsystem docs only for evidenced durable boundaries.
 5. Require every architecture document to contain a `Source map` table with repository-relative paths and label unknowns explicitly.
 6. Use the same installed helper and managed PR asset to create, append, or replace the standard section in `.github/pull_request_template.md` without modifying unmanaged content.
@@ -150,7 +150,7 @@ Expected: exit 0 with `engineering infrastructure checks passed`.
 
 - [ ] **Step 8: Pressure-test the skill**
 
-Reset the fixture, dispatch a fresh subagent with `Use $bootstrap-project at <absolute-skill-path>` prepended to the Step 1 scenario, and verify it preserves custom rules, cites actual source paths, labels unknowns, and avoids syntax-restating comments. If it finds a new loophole, add only the specific counter and re-run the same scenario.
+Reset the fixture, resolve `<absolute-skill-path>` from the current repository root, and dispatch a fresh subagent with `BOOTSTRAP_PROJECT_SKILL_DIR=<absolute-skill-path>` plus `Use $bootstrap-project at <absolute-skill-path>` prepended to the Step 1 scenario. Verify it preserves custom rules, cites actual source paths, labels unknowns, and avoids syntax-restating comments. Later re-runs use the same override. If it finds a new loophole, add only the specific counter and re-run the same scenario.
 
 - [ ] **Step 9: Commit Task 1**
 
