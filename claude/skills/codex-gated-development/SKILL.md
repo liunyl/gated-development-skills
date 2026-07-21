@@ -71,7 +71,7 @@ LOOP, per gate:
 | 6. Self-verify | `/verification-before-completion` — run the module self-checks / tests, confirm green with real output. | — |
 | 7. Clean up | `/simplify`, then `/code-review`. Triage & address findings (`/receiving-code-review`). | — |
 | 8. **Gate #3** | `/codex:review` (or `/codex:adversarial-review`) on the final diff. Run the loop. | ✅ before done |
-| 9. Finish | `/finishing-a-development-branch`. | — |
+| 9. Finish | Use `finish-pr` for audit/drafting, then `/finishing-a-development-branch`. | — |
 
 **Small-task collapse (observable predicate):** if the task is small enough that the spec and the implementation plan are one document, run **one** planning gate on that document instead of Gate #1 and Gate #2 separately. Either way: **at least one Codex gate clears before any implementation code is written.**
 

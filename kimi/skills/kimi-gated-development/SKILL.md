@@ -101,6 +101,7 @@ No phase is mandatory — the When-to-Use threshold decides whether a gate opens
 | Design-fork gate | Two plausible approaches, decision needed | `adversarial` on the comparison write-up |
 | Pre-run gate | About to run something irreversible or costly | `adversarial` on the runbook/script |
 | Final code gate | Implementation + self-verification done, before declaring done | `code` with `--base <commit-before-task>` |
+| Finish handoff | After the final code gate clears | Use `finish-pr` for audit/drafting before the runtime's normal branch-finishing workflow. |
 
 One task, one `--session-key`, reused at every gate point — by the final code gate, each reviewer already holds the plan-gate context and can check the implementation against what was agreed, at near-zero extra context cost.
 
