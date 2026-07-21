@@ -110,10 +110,13 @@ of degrading because uncommitted state cannot be represented by the reviewed
 If the Claude resume command fails after preflight, retry the new Claude
 session once with the full bundle. Do not use Kimi's `--continue`: a real CLI
 probe showed that it starts a fresh session and exits successfully when no
-history exists for the workspace. Capture the `session_<uuid>` resume hint from
-every successful Kimi review, persist it in the task workspace, and resume only
-with `--session <id>`. A missing explicit session fails non-zero and blocks the
-gate instead of silently approving a partial patch. A missing, legacy, or
+history exists for the workspace. Companion probes against the installed CLI
+confirmed that `--session <existing-id>` resumes the original session and
+repeats the same `kimi -r session_...` hint, while `--session <missing-id>`
+exits non-zero without running the prompt. Capture that resume hint from every
+successful Kimi review, persist it in the task workspace, and resume only with
+the documented `--session <id>` long option. A missing explicit session blocks
+the gate instead of silently approving a partial patch. A missing, legacy, or
 malformed Kimi state selects a full fresh review and is replaced only after a
 successful response exposes a valid session ID.
 

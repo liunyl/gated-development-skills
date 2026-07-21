@@ -89,6 +89,8 @@ assert both cases also fall back to full scope. Exercise both split-state cases
 fake Kimi print a deterministic `To resume this session: kimi -r session_...`
 hint, assert later rounds use `--session <id>` rather than `--continue`, and
 make an explicit resume failure block the gate without replacing its state.
+Use a fake ID with another underscore after `session_` so validation exercises
+the complete supported token class.
 Assert Claude's allowed tool set still includes `Agent`, its denied tools name
 `Skill(codex-gated-development)`, and every Kimi call includes an empty
 explicit `--skills-dir`.
@@ -174,7 +176,7 @@ fi
 Initialize both read variables to empty strings and validate the recorded head
 as a commit before using it so corrupt state selects the full path rather than
 aborting under `set -u`. Treat Kimi state as resumable only when its content
-matches `session_[A-Za-z0-9-]+`; the legacy literal `success` forces a full
+matches `session_[A-Za-z0-9_-]+`; the legacy literal `success` forces a full
 fresh Kimi review.
 
 - [ ] **Step 7: Build both deterministic bundle forms**
@@ -223,14 +225,17 @@ normal report, and parse the final resume hint:
 
 ```bash
 kimi_session_id="$(sed -n \
-  's/^To resume this session: kimi -r \(session_[A-Za-z0-9-]*\)$/\1/p' \
+  's/^To resume this session: kimi -r \(session_[A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' \
   "$kimi_raw_report" | tail -n 1)"
 ```
 
 Use `--session "$kimi_session_id"` for a known session. A successful Kimi call
 without one valid resume hint fails the gate and does not update Kimi state.
 This replaces the unsafe `--continue` behavior, which was verified to start a
-fresh session and exit zero when no workspace history exists.
+fresh session and exit zero when no workspace history exists. Live probes also
+verified that the documented `--session` long option resumes an existing ID,
+re-emits the same hint, and exits one for an unknown ID without running the
+prompt.
 
 - [ ] **Step 10: Disable recursive cross-model review gates**
 
