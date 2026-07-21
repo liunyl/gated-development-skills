@@ -50,6 +50,36 @@ file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
 }
 
+assert_rejected() {
+  label=$1
+  expected_status=$2
+  shift 2
+  rejected_stdout="$TMP/rejected.out"
+  rejected_stderr="$TMP/rejected.err"
+
+  if "$@" >"$rejected_stdout" 2>"$rejected_stderr"; then
+    actual_status=0
+  else
+    actual_status=$?
+  fi
+
+  if test "$actual_status" -eq "$expected_status" && test -s "$rejected_stderr"; then
+    return
+  fi
+
+  {
+    printf '%s\n' \
+      "rejection case: $label" \
+      "expected status: $expected_status" \
+      "actual status: $actual_status" \
+      'stdout:'
+    cat "$rejected_stdout"
+    printf '%s\n' 'stderr:'
+    cat "$rejected_stderr"
+  } >&2
+  exit 1
+}
+
 # A missing target is created from the complete block.
 test_action created "$TMP/new.md" "$BLOCK"
 cmp "$TMP/new.md" "$BLOCK"
@@ -119,13 +149,8 @@ Keep me.
 Incomplete block.
 EOF
 cp "$TMP/malformed.md" "$TMP/malformed.before"
-if "$MERGE" "$TMP/malformed.md" "$BLOCK" >"$TMP/out" 2>"$TMP/err"; then
-  exit 1
-else
-  test "$?" -eq 2
-fi
+assert_rejected missing-end-marker 2 "$MERGE" "$TMP/malformed.md" "$BLOCK"
 cmp "$TMP/malformed.md" "$TMP/malformed.before"
-test -s "$TMP/err"
 
 cat >"$TMP/trailing-marker-text.md" <<'EOF'
 Keep me too.
@@ -134,13 +159,40 @@ Untrusted content.
 <!-- END bootstrap-project: engineering-standards --> invalid
 EOF
 cp "$TMP/trailing-marker-text.md" "$TMP/trailing-marker-text.before"
-if "$MERGE" "$TMP/trailing-marker-text.md" "$BLOCK" >"$TMP/out" 2>"$TMP/err"; then
-  exit 1
-else
-  test "$?" -eq 2
-fi
+assert_rejected trailing-marker-text 2 "$MERGE" "$TMP/trailing-marker-text.md" "$BLOCK"
 cmp "$TMP/trailing-marker-text.md" "$TMP/trailing-marker-text.before"
-test -s "$TMP/err"
+
+cat >"$TMP/leading-marker-text.md" <<'EOF'
+Keep leading text unchanged.
+invalid <!-- BEGIN bootstrap-project: engineering-standards -->
+Untrusted content.
+invalid <!-- END bootstrap-project: engineering-standards -->
+EOF
+cp "$TMP/leading-marker-text.md" "$TMP/leading-marker-text.before"
+assert_rejected leading-marker-text 2 "$MERGE" "$TMP/leading-marker-text.md" "$BLOCK"
+cmp "$TMP/leading-marker-text.md" "$TMP/leading-marker-text.before"
+
+cat >"$TMP/internal-marker-whitespace.md" <<'EOF'
+Keep internal whitespace unchanged.
+<!-- BEGIN bootstrap-project: engineering-standards  -->
+Untrusted content.
+<!-- END bootstrap-project: engineering-standards  -->
+EOF
+cp "$TMP/internal-marker-whitespace.md" "$TMP/internal-marker-whitespace.before"
+assert_rejected internal-marker-whitespace 2 \
+  "$MERGE" "$TMP/internal-marker-whitespace.md" "$BLOCK"
+cmp "$TMP/internal-marker-whitespace.md" "$TMP/internal-marker-whitespace.before"
+
+cat >"$TMP/missing-marker-terminator.md" <<'EOF'
+Keep missing terminators unchanged.
+<!-- BEGIN bootstrap-project: engineering-standards
+Untrusted content.
+<!-- END bootstrap-project: engineering-standards
+EOF
+cp "$TMP/missing-marker-terminator.md" "$TMP/missing-marker-terminator.before"
+assert_rejected missing-marker-terminator 2 \
+  "$MERGE" "$TMP/missing-marker-terminator.md" "$BLOCK"
+cmp "$TMP/missing-marker-terminator.md" "$TMP/missing-marker-terminator.before"
 
 cat >"$TMP/duplicate.md" <<'EOF'
 <!-- BEGIN bootstrap-project: engineering-standards -->
@@ -151,13 +203,40 @@ Second.
 <!-- END bootstrap-project: engineering-standards -->
 EOF
 cp "$TMP/duplicate.md" "$TMP/duplicate.before"
-if "$MERGE" "$TMP/duplicate.md" "$BLOCK" >"$TMP/out" 2>"$TMP/err"; then
-  exit 1
-else
-  test "$?" -eq 2
-fi
+assert_rejected duplicate-markers 2 "$MERGE" "$TMP/duplicate.md" "$BLOCK"
 cmp "$TMP/duplicate.md" "$TMP/duplicate.before"
-test -s "$TMP/err"
+
+# A longer marker ID is unrelated and must not be treated as a malformed match.
+cat >"$TMP/suffix-id.md" <<'EOF'
+<!-- BEGIN bootstrap-project: engineering-standards-extra -->
+Other managed content.
+<!-- END bootstrap-project: engineering-standards-extra -->
+EOF
+test_action appended "$TMP/suffix-id.md" "$BLOCK"
+test "$(grep -Fc '<!-- BEGIN bootstrap-project: engineering-standards-extra -->' "$TMP/suffix-id.md")" -eq 1
+test "$(grep -Fc '<!-- BEGIN bootstrap-project: engineering-standards -->' "$TMP/suffix-id.md")" -eq 1
+
+# Relative option-like TARGET and BLOCK names are files, not utility options.
+mkdir "$TMP/option-like-paths"
+cp "$BLOCK" "$TMP/option-like-paths/-block.md"
+(
+  cd "$TMP/option-like-paths"
+  test_action created -AGENTS.md -block.md
+  cmp ./-AGENTS.md ./-block.md
+)
+
+# Operational command failures are distinct from input validation failures.
+mkdir "$TMP/fail-stat" "$TMP/fail-awk"
+printf '%s\n' '#!/bin/sh' 'exit 1' >"$TMP/fail-stat/stat"
+printf '%s\n' '#!/bin/sh' 'exit 1' >"$TMP/fail-awk/awk"
+chmod +x "$TMP/fail-stat/stat" "$TMP/fail-awk/awk"
+cp "$TMP/replace.md" "$TMP/stat-failure.before"
+assert_rejected stat-command-failure 3 env PATH="$TMP/fail-stat:$PATH" \
+  "$MERGE" "$TMP/replace.md" "$BLOCK"
+cmp "$TMP/replace.md" "$TMP/stat-failure.before"
+assert_rejected awk-command-failure 3 env PATH="$TMP/fail-awk:$PATH" \
+  "$MERGE" "$TMP/awk-failure.md" "$BLOCK"
+test ! -e "$TMP/awk-failure.md"
 
 # Execute the documented resolver so relative overrides cannot select helpers
 # from the repository being bootstrapped.
@@ -192,13 +271,11 @@ printf '%s\n' '#!/bin/sh' >"$TARGET_REPO/$RELATIVE_ROOT/.claude/skills/bootstrap
 assert_relative_resolution_rejected() {
   label=$1
   shift
-  if (cd "$TARGET_REPO" && env "$@" sh "$RESOLVER" >"$TMP/out" 2>"$TMP/err"); then
-    printf '%s\n' "$label: relative path selected a target-repository helper" >&2
-    exit 1
-  else
-    test "$?" -eq 2
-  fi
-  test -s "$TMP/err"
+  assert_rejected "$label-relative-resolution" 2 run_resolver_in_target "$@"
+}
+
+run_resolver_in_target() {
+  (cd "$TARGET_REPO" && env "$@" sh "$RESOLVER")
 }
 
 assert_relative_resolution_rejected BOOTSTRAP_PROJECT_SKILL_DIR \
@@ -234,15 +311,10 @@ printf '%s\n' 'Destination content.' >"$TMP/destination.md"
 cp "$TMP/destination.md" "$TMP/destination.before"
 ln -s destination.md "$TMP/link.md"
 link_before=$(readlink "$TMP/link.md")
-if "$MERGE" "$TMP/link.md" "$BLOCK" >"$TMP/out" 2>"$TMP/err"; then
-  exit 1
-else
-  test "$?" -eq 2
-fi
+assert_rejected symbolic-link-target 2 "$MERGE" "$TMP/link.md" "$BLOCK"
 test -L "$TMP/link.md"
 test "$(readlink "$TMP/link.md")" = "$link_before"
 cmp "$TMP/destination.md" "$TMP/destination.before"
-test -s "$TMP/err"
 
 FINISH="$ROOT/shared/skills/finish-pr"
 test -f "$FINISH/SKILL.md"
