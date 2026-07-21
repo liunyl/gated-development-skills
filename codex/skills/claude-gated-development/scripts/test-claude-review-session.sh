@@ -4,7 +4,7 @@ set -euo pipefail
 runner="$(cd "$(dirname "$0")" && pwd)/claude-review.sh"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/claude-review-test.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/home/.kimi-code/bin" "$tmp/relative-bin"
+mkdir -p "$tmp/bin" "$tmp/home/.kimi-code/bin" "$tmp/relative-bin" "$tmp/bundles"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -17,6 +17,11 @@ if [[ -t 0 || -p /dev/stdin ]]; then
   printf 'fake claude: stdin must be pinned to /dev/null\n' >&2
   exit 97
 fi
+prompt="$1"
+bundle_path="$(printf '%s\n' "$prompt" | sed -n 's/^Precomputed review bundle: //p')"
+[[ -n "$bundle_path" && -f "$bundle_path" ]] || exit 98
+call_no="$(($(wc -l < "$CLAUDE_LOG") + 1))"
+cp "$bundle_path" "$BUNDLE_CAPTURE/claude-$call_no.txt"
 [[ -z "${MUTATE_FILE:-}" ]] || chmod 400 "$MUTATE_FILE"
 : > "$CLAUDE_STARTED"
 for _ in {1..100}; do
@@ -81,11 +86,27 @@ for arg in "$@"; do
   [[ "$arg" != *"$LIVE_REPO"* ]] || exit 10
 done
 [[ "$*" == *"$PWD/repo"* ]] || exit 11
+skills_dir=""
+previous=""
+for arg in "$@"; do
+  [[ "$previous" != "--skills-dir" ]] || skills_dir="$arg"
+  previous="$arg"
+done
+[[ -d "$skills_dir" ]] || exit 24
+[[ -z "$(find "$skills_dir" -mindepth 1 -print -quit)" ]] || exit 25
+call_no="$(($(wc -l < "$KIMI_LOG") + 1))"
+cp "$PWD/review-scope.txt" "$BUNDLE_CAPTURE/kimi-$call_no.txt"
 printf 'CALL\tcwd=%q' "$PWD" >> "$KIMI_LOG"
 printf '\t%q' "$@" >> "$KIMI_LOG"
 printf '\n' >> "$KIMI_LOG"
+if [[ -n "${FAIL_KIMI_RESUME:-}" && "$*" == *--session* ]]; then
+  exit 9
+fi
 [[ -z "${FAIL_KIMI:-}" ]] || exit 9
-[[ -n "${NO_KIMI_LAST_MESSAGE:-}" ]] || printf 'fake kimi verdict\n'
+if [[ -z "${NO_KIMI_LAST_MESSAGE:-}" ]]; then
+  printf 'fake kimi verdict\n'
+  printf 'To resume this session: kimi -r session_fake_review_id\n'
+fi
 EOF
 chmod +x "$tmp/home/.kimi-code/bin/kimi"
 
@@ -112,7 +133,8 @@ make_repo() {
 run_review() {
   local repo="$1" task_key="$2" probe="${3:-}"
   local live_repo live_git review_path
-  local -a review_env
+  local mode="${REVIEW_MODE:-adversarial}"
+  local -a review_env runner_args
   live_repo="$(git -C "$repo" rev-parse --show-toplevel)"
   live_git="$(git -C "$repo" rev-parse --path-format=absolute --git-dir)"
   review_path="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -120,6 +142,7 @@ run_review() {
   review_env=(
     HOME="$tmp/home" PATH="$review_path"
     CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log"
+    BUNDLE_CAPTURE="$tmp/bundles"
     RELATIVE_KIMI_MARKER="$tmp/relative-kimi.started"
     LIVE_REPO="$live_repo"
     CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started"
@@ -140,14 +163,18 @@ run_review() {
     )
   fi
   rm -f "$tmp/claude.started" "$tmp/kimi.started"
+  runner_args=("$mode" --focus test)
+  if (($# > 3)); then
+    runner_args+=("${@:4}")
+  fi
   if [[ -n "$task_key" ]]; then
     env -u CLAUDE_REVIEW_SESSION_KEY CODEX_THREAD_ID="$task_key" \
       "${review_env[@]}" \
-      "$runner" adversarial --focus test >/dev/null 2>>"$tmp/review.stderr"
+      "$runner" "${runner_args[@]}" >/dev/null 2>>"$tmp/review.stderr"
   else
     env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
       "${review_env[@]}" \
-      "$runner" adversarial --focus test >/dev/null 2>>"$tmp/review.stderr"
+      "$runner" "${runner_args[@]}" >/dev/null 2>>"$tmp/review.stderr"
   fi
 }
 
@@ -157,6 +184,18 @@ session_id_from() {
 
 resume_id_from() {
   sed -n "${1}s/.*--resume[[:space:]]\([^[:space:]]*\).*/\1/p" "$tmp/claude.log"
+}
+
+last_bundle() {
+  local reviewer="$1" log="$2" count
+  count="$(awk 'END { print NR }' "$log")"
+  printf '%s/bundles/%s-%s.txt\n' "$tmp" "$reviewer" "$count"
+}
+
+session_hash_for() {
+  local repo_root task_key="$2"
+  repo_root="$(cd "$1" && pwd -P)"
+  printf '%s\0%s' "$repo_root" "$task_key" | git -C "$1" hash-object --stdin
 }
 
 repo_a="$tmp/repo-a"
@@ -192,8 +231,11 @@ first_id="$(session_id_from 1)"
 [[ "$(sed -n '2p' "$tmp/claude.log")" == *--disallowedTools* ]] || fail 'resume omitted denied tools'
 [[ "$(sed -n '2p' "$tmp/claude.log")" == *--strict-mcp-config* ]] || fail 'resume omitted strict MCP config'
 [[ "$(sed -n '2p' "$tmp/claude.log")" == *disableAllHooks* ]] || fail 'resume omitted hook lockdown'
-[[ "$(sed -n '1p' "$tmp/kimi.log")" != *--continue* ]] || fail 'first Kimi review unexpectedly resumed a session'
-[[ "$(sed -n '2p' "$tmp/kimi.log")" == *--continue* ]] || fail 'second Kimi review did not resume the session'
+[[ "$(sed -n '1p' "$tmp/kimi.log")" != *--session* ]] || fail 'first Kimi review unexpectedly resumed a session'
+[[ "$(sed -n '2p' "$tmp/kimi.log")" == *--session*session_fake_review_id* ]] || fail 'second Kimi review did not resume the explicit session'
+[[ "$(sed -n '2p' "$tmp/kimi.log")" != *--continue* ]] || fail 'Kimi review used unsafe implicit continuation'
+[[ "$(sed -n '1p' "$tmp/claude.log")" == *--allowedTools*Agent* ]] || fail 'Claude reviewer lost its own subagent tool'
+[[ "$(sed -n '1p' "$tmp/claude.log")" == *codex-gated-development* ]] || fail 'Claude reviewer gate skill was not denied'
 kimi_task_a_cwd="$(sed -n '1s/^CALL\tcwd=\([^[:space:]]*\).*/\1/p' "$tmp/kimi.log")"
 [[ -n "$kimi_task_a_cwd" && "$(sed -n '2p' "$tmp/kimi.log")" == *"cwd=$kimi_task_a_cwd"* ]] || fail 'same task did not reuse Kimi workspace'
 [[ "$kimi_task_a_cwd" != "$repo_a" ]] || fail 'Kimi reviewed the live worktree'
@@ -229,7 +271,7 @@ expected_state="$(printf '%s\0%s' "$repo_a_root" '../../outside' | git -C "$repo
 last_line="$(tail -n 1 "$tmp/claude.log")"
 [[ "$last_line" == *--no-session-persistence* ]] || fail 'no-task review did not stay non-persistent'
 [[ "$last_line" != *--session-id* && "$last_line" != *--resume* ]] || fail 'no-task review unexpectedly reused a session'
-[[ "$(sed -n '8p' "$tmp/kimi.log")" != *--continue* ]] || fail 'no-task Kimi review unexpectedly reused a session'
+[[ "$(sed -n '8p' "$tmp/kimi.log")" != *--session* ]] || fail 'no-task Kimi review unexpectedly reused a session'
 
 (cd "$repo_a" && run_review "$repo_a" sandbox-probe sandbox)
 [[ ! -e "$repo_a/.sandbox-write" ]] || fail 'Kimi wrote an ignored live-worktree file'
@@ -269,6 +311,7 @@ rm -f "$tmp/claude.started" "$tmp/kimi.started"
 (cd "$repo_a" && env -u CODEX_THREAD_ID CLAUDE_REVIEW_SESSION_KEY=env-loser \
   HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
   CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
+  BUNDLE_CAPTURE="$tmp/bundles" \
   RELATIVE_KIMI_MARKER="$tmp/relative-kimi.started" \
   LIVE_REPO="$(git -C "$repo_a" rev-parse --show-toplevel)" \
   CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started" \
@@ -300,5 +343,132 @@ if (cd "$repo_a" && MUTATE_FILE="$mut_target" run_review "$repo_a" mode-mutation
   fail 'mode-only mutation of an untracked file did not fail the gate'
 fi
 unset MUTATE_FILE
+
+repo_incremental="$tmp/repo-incremental"
+git init -q "$repo_incremental"
+git -C "$repo_incremental" config user.name Test
+git -C "$repo_incremental" config user.email test@example.com
+printf 'baseline\n' > "$repo_incremental/tracked.txt"
+git -C "$repo_incremental" add tracked.txt
+git -C "$repo_incremental" commit -qm baseline
+task_base="$(git -C "$repo_incremental" rev-parse HEAD)"
+printf 'OLD_PATCH_BODY\n' > "$repo_incremental/old.txt"
+git -C "$repo_incremental" add old.txt
+git -C "$repo_incremental" commit -qm 'add old task change'
+previous_review_head="$(git -C "$repo_incremental" rev-parse HEAD)"
+
+(cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" --base "$task_base")
+printf 'NEW_PATCH_BODY\n' > "$repo_incremental/new.txt"
+git -C "$repo_incremental" add new.txt
+git -C "$repo_incremental" commit -qm 'add review fix'
+(cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
+  --base "$task_base" --since "$previous_review_head")
+
+claude_incremental="$tmp/bundles/claude-$(awk 'END { print NR }' "$tmp/claude.log").txt"
+kimi_incremental="$tmp/bundles/kimi-$(awk 'END { print NR }' "$tmp/kimi.log").txt"
+for bundle in "$claude_incremental" "$kimi_incremental"; do
+  grep -Fq 'NEW_PATCH_BODY' "$bundle" || fail 'incremental bundle omitted the new commit body'
+  ! grep -Fq 'OLD_PATCH_BODY' "$bundle" || fail 'incremental bundle repeated an old patch body'
+  grep -Fq '## Full task summary' "$bundle" || fail 'incremental bundle omitted the full-task summary'
+done
+
+incremental_hash="$(session_hash_for "$repo_incremental" incremental-task)"
+incremental_state="$(git -C "$repo_incremental" rev-parse --path-format=absolute --git-common-dir)/claude-review-sessions/$incremental_hash.adversarial.reviewed"
+[[ "$(cat "$incremental_state")" == "$task_base $(git -C "$repo_incremental" rev-parse HEAD)" ]] || fail 'joint review checkpoint was not recorded'
+kimi_incremental_state="$tmp/home/.cache/claude-gated-development/kimi-review-workspaces/$incremental_hash/.successful-review"
+[[ "$(cat "$kimi_incremental_state")" == session_fake_review_id ]] || fail 'Kimi explicit session ID was not recorded'
+
+review_calls_before="$(($(wc -l < "$tmp/claude.log") + $(wc -l < "$tmp/kimi.log")))"
+if (cd "$repo_incremental" && run_review "$repo_incremental" invalid-no-base "" --since "$previous_review_head"); then
+  fail '--since without --base did not fail'
+fi
+if (cd "$repo_incremental" && run_review "$repo_incremental" invalid-empty "" --base "$task_base" --since HEAD); then
+  fail 'empty incremental range did not fail'
+fi
+unrelated_commit="$(git -C "$repo_incremental" commit-tree "$(git -C "$repo_incremental" write-tree)" -m unrelated)"
+if (cd "$repo_incremental" && run_review "$repo_incremental" invalid-history "" --base "$task_base" --since "$unrelated_commit"); then
+  fail 'unrelated incremental history did not fail'
+fi
+printf 'dirty\n' > "$repo_incremental/dirty.txt"
+if (cd "$repo_incremental" && run_review "$repo_incremental" invalid-dirty "" --base "$task_base" --since "$previous_review_head"); then
+  fail 'dirty incremental review did not fail'
+fi
+rm -f "$repo_incremental/dirty.txt"
+review_calls_after="$(($(wc -l < "$tmp/claude.log") + $(wc -l < "$tmp/kimi.log")))"
+[[ "$review_calls_after" -eq "$review_calls_before" ]] || fail 'invalid incremental input started a reviewer'
+
+(cd "$repo_incremental" && run_review "$repo_incremental" fresh-incremental "" \
+  --base "$task_base" --since "$previous_review_head")
+grep -Fq 'OLD_PATCH_BODY' "$(last_bundle claude "$tmp/claude.log")" || fail 'fresh Claude session did not receive the full task'
+grep -Fq 'OLD_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'fresh Kimi session did not receive the full task'
+
+code_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
+printf 'CODE_FIRST_BODY\n' > "$repo_incremental/code.txt"
+git -C "$repo_incremental" add code.txt
+git -C "$repo_incremental" commit -qm 'add code gate change'
+(cd "$repo_incremental" && REVIEW_MODE=code run_review "$repo_incremental" incremental-task "" \
+  --base "$task_base" --since "$code_previous")
+grep -Fq 'OLD_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'first code-mode review was not full'
+
+unsafe_since="$(git -C "$repo_incremental" rev-parse HEAD)"
+printf 'UNSAFE_CHECKPOINT_BODY\n' > "$repo_incremental/unsafe.txt"
+git -C "$repo_incremental" add unsafe.txt
+git -C "$repo_incremental" commit -qm 'add unsafe checkpoint fixture'
+(cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
+  --base "$task_base" --since "$unsafe_since")
+grep -Fq 'OLD_PATCH_BODY' "$(last_bundle claude "$tmp/claude.log")" || fail 'checkpoint ahead of reviewed HEAD did not force a full review'
+
+changed_base="$previous_review_head"
+changed_base_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
+printf 'CHANGED_BASE_BODY\n' > "$repo_incremental/changed-base.txt"
+git -C "$repo_incremental" add changed-base.txt
+git -C "$repo_incremental" commit -qm 'add changed base fixture'
+(cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
+  --base "$changed_base" --since "$changed_base_previous")
+grep -Fq 'NEW_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'changed task base did not force a full review'
+
+stale_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
+printf 'STALE_SESSION_BODY\n' > "$repo_incremental/stale.txt"
+git -C "$repo_incremental" add stale.txt
+git -C "$repo_incremental" commit -qm 'add stale session fixture'
+FAIL_KIMI_RESUME=1; export FAIL_KIMI_RESUME
+if (cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
+  --base "$changed_base" --since "$stale_previous"); then
+  unset FAIL_KIMI_RESUME
+  fail 'stale Kimi resume did not fail the current gate'
+fi
+unset FAIL_KIMI_RESUME
+[[ ! -s "$kimi_incremental_state" ]] || fail 'stale Kimi resume state was not cleared'
+(cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
+  --base "$changed_base" --since "$stale_previous")
+[[ "$(tail -n 1 "$tmp/kimi.log")" != *--session* ]] || fail 'stale Kimi session was retried instead of starting fresh'
+grep -Fq 'NEW_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'post-stale Kimi review was not full'
+
+claude_fallback_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
+printf 'CLAUDE_FALLBACK_BODY\n' > "$repo_incremental/claude-fallback.txt"
+git -C "$repo_incremental" add claude-fallback.txt
+git -C "$repo_incremental" commit -qm 'add Claude fallback fixture'
+FAIL_RESUME_MARKER="$tmp/incremental-failed-resume"; export FAIL_RESUME_MARKER
+(cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
+  --base "$changed_base" --since "$claude_fallback_previous")
+unset FAIL_RESUME_MARKER
+grep -Fq 'NEW_PATCH_BODY' "$(last_bundle claude "$tmp/claude.log")" || fail 'fresh Claude fallback did not receive the full task'
+! grep -Fq 'NEW_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'resumed Kimi repeated an old patch body'
+
+escaped_key='../../incremental-outside'
+(cd "$repo_incremental" && run_review "$repo_incremental" "$escaped_key" "" --base "$changed_base")
+escaped_hash="$(session_hash_for "$repo_incremental" "$escaped_key")"
+escaped_checkpoint="$(git -C "$repo_incremental" rev-parse --path-format=absolute --git-common-dir)/claude-review-sessions/$escaped_hash.adversarial.reviewed"
+[[ -f "$escaped_checkpoint" ]] || fail 'hashed incremental checkpoint was not written'
+[[ ! -e "$tmp/incremental-outside" ]] || fail 'incremental checkpoint key escaped its state directory'
+
+checkpoint_failure_key='checkpoint-write-failure'
+checkpoint_failure_hash="$(session_hash_for "$repo_incremental" "$checkpoint_failure_key")"
+checkpoint_failure_path="$(git -C "$repo_incremental" rev-parse --path-format=absolute --git-common-dir)/claude-review-sessions/$checkpoint_failure_hash.adversarial.reviewed"
+mkdir -p "$checkpoint_failure_path"
+if (cd "$repo_incremental" && run_review "$repo_incremental" "$checkpoint_failure_key" "" --base "$changed_base"); then
+  fail 'checkpoint write failure did not fail the gate'
+fi
+rm -rf "$checkpoint_failure_path"
 
 printf 'parallel Claude and Kimi review checks passed\n'
