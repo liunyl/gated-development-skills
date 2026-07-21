@@ -137,4 +137,19 @@ test "$(readlink "$TMP/link.md")" = "$link_before"
 cmp "$TMP/destination.md" "$TMP/destination.before"
 test -s "$TMP/err"
 
+FINISH="$ROOT/shared/skills/finish-pr"
+test -f "$FINISH/SKILL.md"
+grep -Fq 'name: finish-pr' "$FINISH/SKILL.md"
+grep -Fq 'type(scope): imperative summary' "$FINISH/SKILL.md"
+grep -Fq 'blocks the PR' "$FINISH/SKILL.md"
+grep -Fq 'finishing-a-development-branch' "$FINISH/SKILL.md"
+grep -Fq 'stops after drafting' "$FINISH/SKILL.md"
+grep -Fq 'finish-pr' "$ROOT/claude/skills/codex-gated-development/SKILL.md"
+grep -Fq 'finish-pr' "$ROOT/codex/skills/claude-gated-development/SKILL.md"
+grep -Fq 'finish-pr' "$ROOT/kimi/skills/kimi-gated-development/SKILL.md"
+if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$FINISH/SKILL.md"; then
+  printf '%s\n' 'finish-pr contains agent-specific commands' >&2
+  exit 1
+fi
+
 printf '%s\n' 'engineering infrastructure checks passed'

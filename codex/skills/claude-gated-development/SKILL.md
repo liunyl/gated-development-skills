@@ -96,7 +96,7 @@ Any mutation after a clearing pass reopens the dual gate, including a rename, co
 | 4. Verify | Use `superpowers:verification-before-completion`; run the relevant tests and checks with current output. | — |
 | 5. Simplify/review | Use `code-simplifier:code-simplifier` on the complete task diff, then use `pr-review-toolkit:review-pr`; triage findings and rerun affected validation after fixes. | Required before final dual gate |
 | 6. **Dual final gate** | Run `claude-review.sh code` on the complete final diff; converge concurrent Claude + Kimi review. | Required before done |
-| 7. Finish | Use `superpowers:finishing-a-development-branch` when working on a branch. | — |
+| 7. Finish | Use `finish-pr` for audit/drafting, then `superpowers:finishing-a-development-branch` when working on a branch. | — |
 
 Complex engineering has exactly one dual planning gate and one dual final gate. Both Claude and Kimi reports must clear each gate before the artifact advances.
 
@@ -153,4 +153,4 @@ Stop and run the missing gate when:
 - Reviewer focus: add `--focus "<artifact paths and risk classes>"`.
 - Triage: `superpowers:receiving-code-review`.
 - Verify: `superpowers:verification-before-completion`.
-- Finish: `superpowers:finishing-a-development-branch` when applicable.
+- Finish: `finish-pr`, then `superpowers:finishing-a-development-branch` when applicable.
