@@ -44,6 +44,7 @@ grep -Fq 'do not invent module documents' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'focused numbered subsystem documents' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'historical change context' "$BOOTSTRAP/SKILL.md"
 grep -Fq '`docs/plans/` and `docs/superpowers/` are reserved for historical change context and are never current architecture authority' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'only when the documentation guide and repository evidence establish that role; do not infer authority from path names alone' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Current architecture authority lives in `docs/architecture/` by default, or in the repository' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'existing equivalent current-architecture hierarchy' "$BOOTSTRAP/SKILL.md"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$BOOTSTRAP/SKILL.md"; then
