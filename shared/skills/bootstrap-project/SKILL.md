@@ -10,12 +10,15 @@ Build the smallest evidence-grounded baseline while preserving repository-specif
 ## Required sequence
 
 1. Read every applicable instruction file, including existing `AGENTS.md` and `CLAUDE.md`, and inventory existing documentation before editing anything.
-2. Inspect manifests, source and test roots, build/test entry points, runtime entry points, durable module boundaries, persistence, and external integrations. Exclude vendored, generated, cache, and worktree directories. Names alone are not evidence.
-3. Resolve the installed skill directory using the trusted procedure below. Use [assets/project-instructions.md](assets/project-instructions.md) with [scripts/update-managed-block.sh](scripts/update-managed-block.sh) for both `AGENTS.md` and `CLAUDE.md`. Stop on malformed or duplicate matching markers or symbolic-link targets. Preserve and report contradictory unmanaged instructions, then continue only non-conflicting work.
-4. Add a missing architecture set inside the existing `docs/` taxonomy. Create `docs/README.md`, `docs/architecture/README.md`, and `docs/architecture/01-overview.md` only when no equivalent exists. Add numbered subsystem documents only for evidenced durable boundaries that would make the overview unwieldy.
-5. Put a `Source map` table in every architecture document. Map claims to concrete repository-relative files or directories and label unknowns explicitly. Do not infer intent from names.
-6. Use the same installed helper with [assets/pull-request-template.md](assets/pull-request-template.md) to create, append, or replace the managed section in `.github/pull_request_template.md`; preserve all unmanaged content.
-7. Review the complete diff for accidental overwrites and unsupported claims, then run repository checks covering every changed file. Report exact commands and results.
+2. Read the root README, scan the source tree, and sample implementation and tests around apparent boundaries. Record an evidence-backed module map before drafting architecture prose. For every durable module, capture its responsibility, evidence paths, and architecture-document destination.
+3. Use the module map to choose the documentation taxonomy. Keep the overview at system level and add focused numbered subsystem documents for independently explainable durable modules. Empty repositories receive a minimal truthful docs entry point, architecture index, and overview; do not invent module documents.
+4. When two or more independent durable modules need documentation and subagents are available, delegate one bounded module investigation per subagent. The parent owns taxonomy, cross-cutting behavior, integration, source-map validation, and conflict resolution. Work locally when the project is smaller or subagents are unavailable.
+5. Resolve the installed skill directory using the trusted procedure below. Use [assets/project-instructions.md](assets/project-instructions.md) with [scripts/update-managed-block.sh](scripts/update-managed-block.sh) for both `AGENTS.md` and `CLAUDE.md`. Stop on malformed or duplicate matching markers or symbolic-link targets. Preserve and report contradictory unmanaged instructions, then continue only non-conflicting work.
+6. Put a `Source map` table in every architecture document. Map claims to concrete repository-relative files or directories and label unknowns explicitly. Do not infer intent from names.
+7. Use the same installed helper with [assets/pull-request-template.md](assets/pull-request-template.md) to create, append, or replace the managed section in `.github/pull_request_template.md`; preserve all unmanaged content.
+8. Review the complete diff for accidental overwrites and unsupported claims, then run repository checks covering every changed file. Report exact commands and results.
+
+Treat `docs/plans/` and `docs/superpowers/` as historical change context, not current architecture authority.
 
 ## Trusted skill-directory resolution
 
@@ -78,10 +81,13 @@ Repeat for `CLAUDE.md` and `.github/pull_request_template.md` with the appropria
 
 ## Architecture output
 
+- Start from the evidence-backed module map and settle the taxonomy before drafting prose. Keep `docs/architecture/01-overview.md` at system level; add focused numbered documents only for independently explainable durable modules.
 - `docs/README.md`: documentation purpose, reading order, freshness rule, architecture index.
 - `docs/architecture/README.md`: subsystem map and links to architecture documents.
 - `docs/architecture/01-overview.md`: system context, component responsibilities, primary control/data flows, cross-cutting invariants, and source map.
 - Existing equivalent: preserve its organization, update its index, and fill material gaps instead of creating a competing hierarchy.
+
+`docs/plans/` and `docs/superpowers/` preserve historical change context; current architecture authority lives in `docs/architecture/`.
 
 A `Source map` table uses claims, not guesses:
 
