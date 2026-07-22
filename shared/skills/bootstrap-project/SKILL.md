@@ -10,7 +10,7 @@ Build the smallest evidence-grounded baseline while preserving repository-specif
 ## Required sequence
 
 1. Read every applicable instruction file, including existing `AGENTS.md` and `CLAUDE.md`, and inventory existing documentation before editing anything.
-2. Read the root README, scan the source tree, and sample implementation and tests around apparent boundaries. Record an evidence-backed module map before drafting architecture prose. A durable module has an independent responsibility plus a meaningful interface, data flow, or lifecycle; paths alone are not evidence. For every durable module, capture its responsibility, evidence paths, and architecture-document destination.
+2. Read the root README and inspect manifests, source and test roots, build/test entry points, runtime entry points, persistence, and external integrations. Scan the source tree and sample implementation and tests around apparent boundaries, excluding vendored, generated, cache, and worktree directories. Record an evidence-backed module map before drafting architecture prose. A durable module has an independent responsibility plus a meaningful interface, data flow, or lifecycle; paths alone are not evidence. For every durable module, capture its responsibility, evidence paths, and architecture-document destination.
 3. Use the module map to choose the documentation taxonomy. Keep the overview at system level and add focused numbered subsystem documents for independently explainable durable modules. Empty repositories receive a minimal truthful docs entry point, architecture index, and overview; do not invent module documents.
 4. When two or more independent durable modules need documentation and subagents are available, delegate one bounded module investigation per subagent. The parent owns taxonomy, cross-cutting behavior, integration, source-map validation, and conflict resolution. Work locally when the project is smaller or subagents are unavailable.
 5. Resolve the installed skill directory using the trusted procedure below. Use [assets/project-instructions.md](assets/project-instructions.md) with [scripts/update-managed-block.sh](scripts/update-managed-block.sh) for both `AGENTS.md` and `CLAUDE.md`. Stop on malformed or duplicate matching markers or symbolic-link targets. Preserve and report contradictory unmanaged instructions, then continue only non-conflicting work.
@@ -103,7 +103,7 @@ Replace examples with paths observed in the target repository.
 | Output | Source or rule | Merge behavior |
 |---|---|---|
 | `AGENTS.md`, `CLAUDE.md` | `assets/project-instructions.md` | Create, append, or replace one matching managed block |
-| Architecture docs | Repository evidence | Preserve taxonomy; create only missing equivalents |
+| Architecture docs | Repository evidence | Reconcile taxonomy from the module map; preserve equivalent existing content |
 | `.github/pull_request_template.md` | `assets/pull-request-template.md` | Create, append, or replace one matching managed block |
 | Validation | Repository checks | Record exact commands and results |
 
