@@ -18,7 +18,7 @@ Build the smallest evidence-grounded baseline while preserving repository-specif
 7. Use the same installed helper with [assets/pull-request-template.md](assets/pull-request-template.md) to create, append, or replace the managed section in `.github/pull_request_template.md`; preserve all unmanaged content.
 8. Review the complete diff for accidental overwrites and unsupported claims, then run repository checks covering every changed file. Report exact commands and results.
 
-Treat documentation the repository identifies as historical change context -- `docs/plans/` and `docs/superpowers/` by default -- as not current architecture authority. Preserve any existing equivalent current-architecture hierarchy even when it lives outside `docs/architecture/`.
+`docs/plans/` and `docs/superpowers/` are reserved for historical change context and are never current architecture authority. For other locations, preserve an existing equivalent current-architecture hierarchy only when the documentation guide and repository evidence establish that role; do not infer authority from path names alone.
 
 ## Trusted skill-directory resolution
 
@@ -87,7 +87,7 @@ Repeat for `CLAUDE.md` and `.github/pull_request_template.md` with the appropria
 - `docs/architecture/01-overview.md` by default, or the existing equivalent overview: system context, component responsibilities, primary control/data flows, cross-cutting invariants, and source map.
 - Existing equivalent current-architecture hierarchy: preserve its organization, current-authority role, paths, and naming conventions; update its index and fill material gaps instead of creating a competing hierarchy.
 
-`docs/plans/` and `docs/superpowers/` preserve historical change context. Current architecture authority lives in `docs/architecture/` by default, or in the repository's existing equivalent current-architecture hierarchy, such as an authoritative `ARCHITECTURE.md` or `docs/design/`. Do not infer authority from paths alone.
+`docs/plans/` and `docs/superpowers/` are reserved for historical change context and are never current architecture authority. Current architecture authority lives in `docs/architecture/` by default, or in the repository's existing equivalent current-architecture hierarchy when its documentation guide and repository evidence establish that role, such as an authoritative `ARCHITECTURE.md` or `docs/design/`. Do not infer authority from path names alone.
 
 A `Source map` table uses claims, not guesses:
 
