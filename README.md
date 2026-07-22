@@ -3,17 +3,21 @@
 Gate skills for Claude Code, Codex CLI, and Kimi Code. The Codex-side
 `claude-gated-development` skill is complexity-routed: local, reversible,
 single-path work with a direct check skips external review, while concrete
-complex or high-risk work uses concurrent independent Claude + Kimi planning
-and final reviews. Its real quant backtests remain gated before their first
-run. Each review mode starts with the full task; after fixes are committed,
-later rounds in the same persistent sessions can use
-`--since <previous-reviewed-head>` to send only the new commit range plus a
-full-task summary.
+complex or high-risk work uses Claude as the sole mandatory external gate for
+planning and final reviews. Optional Kimi review is limited to named
+concurrency, idempotency, transaction, tenant-isolation, and distributed-state
+risks; Kimi quota or transport failure does not block Claude. Its real quant
+backtests remain gated before their first run. Each Claude review mode starts
+with the full task; after fixes are committed, later rounds in the same
+persistent Claude session can use `--since <previous-reviewed-head>` to send
+only the new commit range plus a full-task summary. Optional Kimi reviews use a
+fresh full snapshot, may use built-in subagents, and may not chain to another
+external reviewer or review gate.
 
 | Skill | Lives in | Purpose |
 |-------|----------|---------|
 | `codex-gated-development` | Claude Code — `~/.claude/skills/` | Claude side: gate before Claude starts real work |
-| `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: route complex/high-risk work through Claude + Kimi review |
+| `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: gate complex/high-risk work with Claude; optionally target Kimi at named state-consistency risks |
 | `kimi-gated-development` | Kimi Code — `~/.kimi-code/skills/` | Kimi side: judgment-triggered dual gate — Claude and Codex review in parallel, each reusing one persistent session per task across all review rounds |
 
 The tool-neutral engineering skills install unchanged in every runtime:
