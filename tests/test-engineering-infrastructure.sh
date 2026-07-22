@@ -19,6 +19,11 @@ grep -Fq 'CLAUDE_CONFIG_DIR' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'CODEX_HOME' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'KIMI_CODE_HOME' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Behavior before and after' "$BOOTSTRAP/assets/pull-request-template.md"
+grep -Fq 'evidence-backed module map' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'before drafting architecture prose' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'two or more independent durable modules' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Empty repositories' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'historical change context' "$BOOTSTRAP/SKILL.md"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$BOOTSTRAP/SKILL.md"; then
   printf '%s\n' 'bootstrap-project contains agent-specific commands' >&2
   exit 1
@@ -27,6 +32,10 @@ fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 BLOCK="$BOOTSTRAP/assets/project-instructions.md"
+
+grep -Fq 'introduces, removes, splits, or merges a durable module' "$BLOCK"
+grep -Fq 'Keep the overview focused on system context' "$BLOCK"
+grep -Fq 'docs/architecture/README.md' "$BLOCK"
 
 test_action() {
   expected=$1
@@ -487,6 +496,10 @@ PR_TEMPLATE="$ROOT/.github/pull_request_template.md"
 DOCS_INDEX="$ROOT/docs/README.md"
 ARCHITECTURE_INDEX="$ROOT/docs/architecture/README.md"
 OVERVIEW="$ROOT/docs/architecture/01-overview.md"
+
+grep -Fq 'not authoritative for the current code' "$DOCS_INDEX"
+grep -Fq 'docs/superpowers/' "$DOCS_INDEX"
+grep -Fq 'evidence-backed module map' "$OVERVIEW"
 
 for file in \
   "$AGENTS" \
