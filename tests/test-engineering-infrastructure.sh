@@ -461,6 +461,7 @@ test "$(readlink "$TMP/link.md")" = "$link_before"
 cmp "$TMP/destination.md" "$TMP/destination.before"
 
 FINISH="$ROOT/shared/skills/finish-pr"
+CODEX_GATE="$ROOT/codex/skills/claude-gated-development/SKILL.md"
 test -f "$FINISH/SKILL.md"
 grep -Fq 'name: finish-pr' "$FINISH/SKILL.md"
 grep -Fq 'type(scope): imperative summary' "$FINISH/SKILL.md"
@@ -514,6 +515,12 @@ cmp "$TMP/claude-managed.md" "$BLOCK"
 grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$AGENTS"
 grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$CLAUDE"
 
+grep -Fq 'first round for each review mode is a full review' "$CODEX_GATE"
+grep -Fq -- '--since "$PREVIOUS_REVIEW_HEAD"' "$CODEX_GATE"
+grep -Fq 'Commit the fixes before an incremental rerun.' "$CODEX_GATE"
+grep -Fq 'Claude may still spawn its own subagents' "$CODEX_GATE"
+grep -Fq 'Kimi may still use its built-in subagents' "$CODEX_GATE"
+
 test "$(grep -Fc '<!-- BEGIN bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
 test "$(grep -Fc '<!-- END bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
 previous_line=0
@@ -539,6 +546,8 @@ done
 
 grep -Fq 'Source map' "$OVERVIEW"
 grep -Fq 'Source map' "$ARCHITECTURE_INDEX"
+grep -Fq 'incremental-review-scope.txt' "$OVERVIEW"
+grep -Fq -- '--since <previous-reviewed-head>' "$ROOT/README.md"
 if grep -Ern 'POSIX helper|POSIX shell script|POSIX-compatible shell checks' \
   "$ROOT/docs" "$BOOTSTRAP/SKILL.md" >"$TMP/posix-claims"; then
   cat "$TMP/posix-claims" >&2

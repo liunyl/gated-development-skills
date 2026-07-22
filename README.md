@@ -5,7 +5,10 @@ Gate skills for Claude Code, Codex CLI, and Kimi Code. The Codex-side
 single-path work with a direct check skips external review, while concrete
 complex or high-risk work uses concurrent independent Claude + Kimi planning
 and final reviews. Its real quant backtests remain gated before their first
-run.
+run. Each review mode starts with the full task; after fixes are committed,
+later rounds in the same persistent sessions can use
+`--since <previous-reviewed-head>` to send only the new commit range plus a
+full-task summary.
 
 | Skill | Lives in | Purpose |
 |-------|----------|---------|
