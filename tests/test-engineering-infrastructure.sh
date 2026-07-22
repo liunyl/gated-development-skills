@@ -19,6 +19,8 @@ grep -Fq 'CLAUDE_CONFIG_DIR' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'CODEX_HOME' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'KIMI_CODE_HOME' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Behavior before and after' "$BOOTSTRAP/assets/pull-request-template.md"
+grep -Fq 'Read `docs/README.md` when present, then read the repository' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'existing documentation entry point, architecture index, and relevant current-architecture documents' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'root README' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'manifests, source and test roots, build/test entry points, runtime entry points, persistence, and external integrations' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Scan the source tree and sample implementation and tests around apparent boundaries' "$BOOTSTRAP/SKILL.md"
@@ -29,9 +31,11 @@ grep -Fq 'independent responsibility plus a meaningful interface, data flow, or 
 grep -Fq 'capture its responsibility, evidence paths, and architecture-document destination' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Use the module map to choose the documentation taxonomy' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Reconcile taxonomy from the module map; preserve equivalent existing content' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'at most one durable module may keep readable architecture detail in one overview' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'multiple durable modules emerge or the detail needs independent navigation' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'two or more independent durable modules' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'subagents are available' "$BOOTSTRAP/SKILL.md"
-grep -Fq 'one bounded module investigation per subagent' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'one bounded module investigation and draft per subagent' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'The parent owns taxonomy, cross-cutting behavior, integration, source-map validation, and conflict resolution' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Work locally when the project is smaller or subagents are unavailable' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Empty repositories' "$BOOTSTRAP/SKILL.md"
@@ -39,6 +43,8 @@ grep -Fq 'minimal truthful docs entry point, architecture index, and overview' "
 grep -Fq 'do not invent module documents' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'focused numbered subsystem documents' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'historical change context' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Current architecture authority lives in `docs/architecture/` by default, or in the repository' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'existing equivalent current-architecture hierarchy' "$BOOTSTRAP/SKILL.md"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$BOOTSTRAP/SKILL.md"; then
   printf '%s\n' 'bootstrap-project contains agent-specific commands' >&2
   exit 1
@@ -52,6 +58,9 @@ grep -Fq 'introduces, removes, splits, or merges a durable module' "$BLOCK"
 grep -Fq 'Keep the overview focused on system context' "$BLOCK"
 grep -Fq 'docs/architecture/README.md' "$BLOCK"
 grep -Fq 'by default, or its existing equivalent' "$BLOCK"
+grep -Fq 'at most one durable module may keep readable architecture detail in its overview' "$BLOCK"
+grep -Fq 'When multiple durable modules emerge or detail needs independent navigation' "$BLOCK"
+grep -Fq 'Treat `docs/plans/` and `docs/superpowers/` as historical change context, not authoritative descriptions of the current code.' "$BLOCK"
 
 test_action() {
   expected=$1
@@ -522,6 +531,8 @@ grep -Fq 'not authoritative for the current code' "$DOCS_INDEX"
 grep -Fq 'evidence-backed module map' "$OVERVIEW"
 grep -Fq 'Architecture overviews stay focused on system context' "$OVERVIEW"
 grep -Fq 'focused numbered subsystem documents' "$OVERVIEW"
+grep -Fq 'at most one durable module may keep readable detail' "$OVERVIEW"
+grep -Fq 'existing equivalent current-architecture hierarchy retains authority' "$OVERVIEW"
 
 for file in \
   "$AGENTS" \

@@ -17,7 +17,7 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
 | Claude Code gate | Requires independent Codex review for non-trivial engineering work and quant backtests. | `claude/skills/codex-gated-development/SKILL.md` |
 | Codex gate | Routes complex or high-risk work through a mandatory Claude review, with optional targeted Kimi review for named state-consistency risks. | `codex/skills/claude-gated-development/SKILL.md`; `codex/skills/claude-gated-development/scripts/claude-review.sh` |
 | Kimi Code gate | Uses a judgment-based threshold and persistent Claude and Codex reviewer sessions. | `kimi/skills/kimi-gated-development/SKILL.md`; `kimi/skills/kimi-gated-development/scripts/` |
-| `bootstrap-project` | Builds an evidence-backed module map and settles the architecture taxonomy before prose, while preserving repository-specific guidance and installing managed instructions, a PR template, and current architecture docs. | `shared/skills/bootstrap-project/SKILL.md`; `shared/skills/bootstrap-project/assets/`; `shared/skills/bootstrap-project/scripts/update-managed-block.sh` |
+| `bootstrap-project` | Builds an evidence-backed module map and settles the architecture taxonomy before prose, while allowing a repository with at most one durable module to keep readable detail in one overview and preserving an existing equivalent current-architecture hierarchy. | `shared/skills/bootstrap-project/SKILL.md`; `shared/skills/bootstrap-project/assets/`; `shared/skills/bootstrap-project/scripts/update-managed-block.sh` |
 | `finish-pr` | Audits the complete proposed diff, drafts commit and PR content, and hands branch lifecycle work to an established finishing workflow. | `shared/skills/finish-pr/SKILL.md` |
 
 ## Primary flow
@@ -59,13 +59,17 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
   (`shared/skills/bootstrap-project/assets/project-instructions.md`;
   `shared/skills/finish-pr/SKILL.md`)
 - Architecture overviews stay focused on system context, high-level flows,
-  cross-cutting invariants, and navigation. Independently explainable durable
-  modules grow into focused numbered subsystem documents instead.
+  cross-cutting invariants, and navigation. A repository with
+  at most one durable module may keep readable detail in its overview; multiple
+  durable modules or detail that needs independent navigation require
+  focused numbered subsystem documents under the default hierarchy or the
+  existing equivalent's conventions.
   (`shared/skills/bootstrap-project/SKILL.md`;
   `shared/skills/bootstrap-project/assets/project-instructions.md`)
-- `docs/architecture/` describes the current code. `docs/plans/` and
-  `docs/superpowers/` preserve historical change context rather than
-  authoritative current architecture.
+- `docs/architecture/` is the default current-architecture hierarchy; an
+  existing equivalent current-architecture hierarchy retains authority. This
+  repository uses `docs/architecture/` for current code, while `docs/plans/`
+  and `docs/superpowers/` preserve historical change context.
   (`docs/README.md`; `shared/skills/bootstrap-project/SKILL.md`)
 - Codex gate checkpoints are scoped by repository, task session, and review
   mode. Each `<session-file>.<mode>.reviewed` record stores the resolved task
