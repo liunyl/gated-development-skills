@@ -34,7 +34,10 @@ Ask a fresh subagent, without the proposed wording, to bootstrap documentation f
 
 - [ ] **Step 2: Add failing contract assertions**
 
-Add these assertions near the existing bootstrap checks:
+Add the `$BOOTSTRAP` assertions after the existing bootstrap checks and add the
+`$BLOCK` assertions after `BLOCK` is assigned. Add the `$DOCS_INDEX` and
+`$OVERVIEW` assertions in the later dogfood section, after those variables are
+assigned:
 
 ```sh
 grep -Fq 'evidence-backed module map' "$BOOTSTRAP/SKILL.md"
@@ -90,6 +93,8 @@ When two or more independent durable modules need documentation and subagents ar
 ```
 
 Also state that `docs/plans/` and `docs/superpowers/` are historical change context and not current architecture authority.
+Replace the existing "would make the overview unwieldy" split condition so the
+skill has one durable-module rule rather than two competing criteria.
 
 - [ ] **Step 2: Add ongoing durable-module rules to the managed asset**
 
@@ -115,7 +120,8 @@ Expected: both commands print `replaced`.
 
 - [ ] **Step 4: Make `docs/README.md` the authority guide**
 
-State the reading order and exact roles:
+Preserve its existing `## Architecture` index and overview link, then state the
+reading order and exact roles:
 
 ```markdown
 Start with the architecture index and relevant current-architecture documents. Use plans only when reconstructing the reasoning behind a particular commit or PR.
