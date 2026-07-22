@@ -7,8 +7,8 @@ umask 077
 usage() {
   cat <<'EOF'
 Usage:
-  claude-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--session-key KEY]
-  claude-review.sh code [--base REF] [--since REF] [--focus TEXT] [--session-key KEY]
+  claude-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
+  claude-review.sh code [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
 
 Without --base, review staged, unstaged, and untracked working-tree changes.
 With --base, review REF...HEAD plus current working-tree changes.
@@ -16,10 +16,15 @@ With --base and --since, review only committed changes since REF when the same
 review mode has a verified persistent checkpoint; otherwise review the full
 task. Incremental review requires a clean working tree.
 
+Claude is the mandatory reviewer. Repeat --kimi-risk to add a concurrent Kimi
+second opinion for: concurrency, idempotency, database-transactions,
+tenant-isolation, or distributed-state. Kimi availability or transport failure
+does not fail the Claude gate; any valid finding it returns must still be triaged.
+
 Session continuity: with --session-key (or CLAUDE_REVIEW_SESSION_KEY, or
-CODEX_THREAD_ID), one persistent Claude session and one persistent Kimi
-workspace per (repository, key) are reused across review rounds. Without any
-key the review runs non-persistently.
+CODEX_THREAD_ID), one persistent Claude session is reused across review rounds.
+Optional Kimi reviews always use a fresh full snapshot. Without any key the
+Claude review also runs non-persistently.
 EOF
 }
 
@@ -44,6 +49,7 @@ esac
 base=""
 since=""
 focus=""
+kimi_risks=()
 session_key_arg=""
 while (($#)); do
   case "$1" in
@@ -56,6 +62,15 @@ while (($#)); do
     --focus)
       (($# >= 2)) || die_usage "--focus requires text"
       focus="$2"
+      shift 2
+      ;;
+    --kimi-risk)
+      (($# >= 2)) || die_usage "--kimi-risk requires a value"
+      case "$2" in
+        concurrency|idempotency|database-transactions|tenant-isolation|distributed-state) ;;
+        *) die_usage "unsupported Kimi risk: $2" ;;
+      esac
+      kimi_risks+=("$2")
       shift 2
       ;;
     --since)
@@ -80,20 +95,38 @@ done
 
 command -v git >/dev/null 2>&1 || die_usage "git is not installed"
 claude_bin="$(command -v claude 2>/dev/null)" || die_usage "claude CLI is not installed"
-kimi_bin="$(command -v kimi 2>/dev/null || true)"
-[[ -n "$kimi_bin" ]] || kimi_bin="${HOME:-}/.kimi-code/bin/kimi"
-if [[ "$kimi_bin" != /* ]]; then
-  kimi_bin="$(cd "$(dirname "$kimi_bin")" && pwd -P)/$(basename "$kimi_bin")"
-fi
-[[ -x "$kimi_bin" ]] || die_usage "kimi CLI is not installed"
-sandbox_bin="/usr/bin/sandbox-exec"
-if [[ ! -x "$sandbox_bin" ]]; then
-  sandbox_bin="$(command -v sandbox-exec 2>/dev/null || true)"
-  if [[ -n "$sandbox_bin" && "$sandbox_bin" != /* ]]; then
-    sandbox_bin="$(cd "$(dirname "$sandbox_bin")" && pwd -P)/$(basename "$sandbox_bin")"
+review_with_kimi=0
+kimi_risk_list=""
+kimi_focus_arg=""
+kimi_bin=""
+sandbox_bin=""
+if ((${#kimi_risks[@]})); then
+  printf -v kimi_risk_list '%s, ' "${kimi_risks[@]}"
+  kimi_risk_list="${kimi_risk_list%, }"
+  kimi_focus_arg="Audit only these risk classes: $kimi_risk_list."
+  review_with_kimi=1
+  kimi_bin="$(command -v kimi 2>/dev/null || true)"
+  [[ -n "$kimi_bin" ]] || kimi_bin="${HOME:-}/.kimi-code/bin/kimi"
+  if [[ "$kimi_bin" != /* ]]; then
+    kimi_bin="$(cd "$(dirname "$kimi_bin")" && pwd -P)/$(basename "$kimi_bin")"
+  fi
+  if [[ ! -x "$kimi_bin" ]]; then
+    printf 'Warning: optional Kimi review unavailable: kimi CLI is not installed\n' >&2
+    review_with_kimi=0
+  else
+    sandbox_bin="/usr/bin/sandbox-exec"
+    if [[ ! -x "$sandbox_bin" ]]; then
+      sandbox_bin="$(command -v sandbox-exec 2>/dev/null || true)"
+      if [[ -n "$sandbox_bin" && "$sandbox_bin" != /* ]]; then
+        sandbox_bin="$(cd "$(dirname "$sandbox_bin")" && pwd -P)/$(basename "$sandbox_bin")"
+      fi
+    fi
+    if [[ ! -x "$sandbox_bin" ]]; then
+      printf 'Warning: optional Kimi review unavailable: native sandbox-exec is missing\n' >&2
+      review_with_kimi=0
+    fi
   fi
 fi
-[[ -x "$sandbox_bin" ]] || die_usage "native sandbox-exec is required for Kimi review"
 if [[ "$claude_bin" == /* ]]; then
   export PATH="$(dirname "$claude_bin"):$PATH"
 fi
@@ -159,7 +192,10 @@ incremental_review_bundle="$review_tmp/incremental-review-scope.txt"
 review_bundle="$full_review_bundle"
 sandbox_profile="$review_tmp/kimi.sb"
 kimi_skills_dir="$review_tmp/kimi-skills"
-mkdir -p "$kimi_skills_dir"
+if [[ "$review_with_kimi" -eq 1 ]] && ! mkdir -p "$kimi_skills_dir"; then
+  printf 'Warning: optional Kimi skills setup failed; continuing with Claude only\n' >&2
+  review_with_kimi=0
+fi
 
 session_key="${session_key_arg:-${CLAUDE_REVIEW_SESSION_KEY:-${CODEX_THREAD_ID:-}}}"
 session_file=""
@@ -168,8 +204,6 @@ reviewed_state_file=""
 reviewed_base=""
 reviewed_head=""
 kimi_workspace="$review_tmp/kimi-workspace"
-kimi_state_file=""
-kimi_session_id=""
 if [[ -n "$session_key" ]]; then
   session_dir="$git_common_dir/claude-review-sessions"
   mkdir -p "$session_dir"
@@ -187,22 +221,11 @@ if [[ -n "$session_key" ]]; then
     fi
   fi
 
-  kimi_workspace_dir="${XDG_CACHE_HOME:-${HOME:-}/.cache}/claude-gated-development/kimi-review-workspaces"
-  mkdir -p "$kimi_workspace_dir"
-  kimi_workspace="$kimi_workspace_dir/$session_hash"
-  mkdir -p "$kimi_workspace"
-  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
-  kimi_state_file="$kimi_workspace/.successful-review"
-  if [[ -s "$kimi_state_file" ]]; then
-    IFS= read -r kimi_session_id < "$kimi_state_file" || true
-    [[ "$kimi_session_id" =~ ^session_[A-Za-z0-9_-]+$ ]] || kimi_session_id=""
-  fi
 fi
 
 incremental_active=0
 if [[ -n "$since" ]]; then
-  if [[ -n "$session_id" && -n "$kimi_session_id" &&
-        "$reviewed_base" == "$base_oid" ]] &&
+  if [[ -n "$session_id" && "$reviewed_base" == "$base_oid" ]] &&
      git -C "$repo_root" merge-base --is-ancestor "$since_oid" "$reviewed_head" &&
      git -C "$repo_root" merge-base --is-ancestor "$reviewed_head" "$head_oid"; then
     incremental_active=1
@@ -224,21 +247,29 @@ fi
 
 sandbox_path() {
   local value="$1"
-  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die_usage "repository path cannot contain newlines"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
   value="${value//\\/\\\\}"
   printf '%s' "${value//\"/\\\"}"
 }
 
-sandbox_repo="$(sandbox_path "$repo_root")"
-sandbox_common="$(sandbox_path "$git_common_dir")"
-sandbox_git="$(sandbox_path "$git_dir")"
-{
-  printf '(version 1)\n'
-  printf '(allow default)\n'
-  printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_repo"
-  printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_common"
-  printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_git"
-} > "$sandbox_profile"
+prepare_kimi_sandbox() {
+  local sandbox_repo sandbox_common sandbox_git
+  sandbox_repo="$(sandbox_path "$repo_root")" || return
+  sandbox_common="$(sandbox_path "$git_common_dir")" || return
+  sandbox_git="$(sandbox_path "$git_dir")" || return
+  {
+    printf '(version 1)\n' &&
+    printf '(allow default)\n' &&
+    printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_repo" &&
+    printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_common" &&
+    printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_git"
+  } > "$sandbox_profile"
+}
+
+if [[ "$review_with_kimi" -eq 1 ]] && ! prepare_kimi_sandbox; then
+  printf 'Warning: optional Kimi sandbox setup failed; continuing with Claude only\n' >&2
+  review_with_kimi=0
+fi
 
 {
   printf 'Repository: %s\n' "$repo_root"
@@ -362,27 +393,29 @@ run_claude() {
 }
 
 prepare_kimi_workspace() {
-  local line kimi_repo
-  mkdir -p "$kimi_workspace"
-  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)"
+  local line kimi_repo path snapshot_paths
+  mkdir -p "$kimi_workspace" || return
+  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)" || return
   kimi_repo="$kimi_workspace/repo"
-  rm -rf "$kimi_workspace/repo"
-  mkdir -p "$kimi_workspace/repo"
+  snapshot_paths="$kimi_workspace/snapshot-paths"
+  rm -rf "$kimi_workspace/repo" || return
+  mkdir -p "$kimi_workspace/repo" || return
+  git -C "$repo_root" ls-files --cached --others --exclude-standard -z > "$snapshot_paths" || return
   while IFS= read -r -d '' path; do
     [[ -e "$repo_root/$path" || -L "$repo_root/$path" ]] || continue
-    mkdir -p "$kimi_workspace/repo/$(dirname "$path")"
+    mkdir -p "$kimi_workspace/repo/$(dirname "$path")" || return
     if [[ -L "$repo_root/$path" ]]; then
-      printf 'symlink\n' > "$kimi_workspace/repo/$path"
+      printf 'symlink\n' > "$kimi_workspace/repo/$path" || return
     elif [[ -d "$repo_root/$path" ]]; then
-      mkdir -p "$kimi_workspace/repo/$path"
-      printf 'gitlink\n' > "$kimi_workspace/repo/$path/.gitlink"
+      mkdir -p "$kimi_workspace/repo/$path" || return
+      printf 'gitlink\n' > "$kimi_workspace/repo/$path/.gitlink" || return
     else
-      cp -p -- "$repo_root/$path" "$kimi_workspace/repo/$path"
+      cp -p -- "$repo_root/$path" "$kimi_workspace/repo/$path" || return
     fi
-  done < <(git -C "$repo_root" ls-files --cached --others --exclude-standard -z)
+  done < "$snapshot_paths"
   while IFS= read -r line || [[ -n "$line" ]]; do
-    printf '%s\n' "${line//$repo_root/$kimi_repo}"
-  done < "$review_bundle" > "$kimi_workspace/review-scope.txt"
+    printf '%s\n' "${line//$repo_root/$kimi_repo}" || return
+  done < "$full_review_bundle" > "$kimi_workspace/review-scope.txt" || return
 }
 
 run_claude_review() {
@@ -421,13 +454,8 @@ run_claude_review() {
 run_kimi_review() {
   local -a kimi_args=(--skills-dir "$kimi_skills_dir" -p "$kimi_prompt")
   local -a kimi_env=(env -u OLDPWD)
-  local name parsed_session_id kimi_status
-  local kimi_resuming=0
+  local name kimi_status
   local kimi_raw_report="$review_tmp/kimi-raw-report.txt"
-  if [[ -n "$kimi_session_id" ]]; then
-    kimi_args=(--session "$kimi_session_id" "${kimi_args[@]}")
-    kimi_resuming=1
-  fi
   while IFS= read -r name; do
     [[ "$name" == GIT_* ]] && kimi_env+=(-u "$name")
   done < <(compgen -e)
@@ -442,42 +470,27 @@ run_kimi_review() {
     kimi_status=$?
   fi
   cat "$kimi_raw_report"
-
-  if [[ "$kimi_status" -ne 0 && "$kimi_resuming" -eq 1 ]]; then
-    if ! : > "$kimi_state_file"; then
-      printf 'Error: could not clear stale Kimi session state at %s\n' "$kimi_state_file" >&2
-      return 5
-    fi
-  fi
-  if [[ "$kimi_status" -eq 0 ]]; then
-    parsed_session_id="$(sed -n 's/^To resume this session: kimi -r \(session_[A-Za-z0-9_-][A-Za-z0-9_-]*\)$/\1/p' "$kimi_raw_report" | tail -n 1)"
-    if [[ -z "$parsed_session_id" ]]; then
-      if [[ "$kimi_resuming" -eq 1 ]] && ! : > "$kimi_state_file"; then
-        printf 'Error: could not clear unusable Kimi session state at %s\n' "$kimi_state_file" >&2
-        return 5
-      fi
-      printf 'Error: Kimi produced no valid resume hint; gate failed\n' >&2
-      return 6
-    fi
-    if [[ -n "$kimi_state_file" ]] && ! printf '%s\n' "$parsed_session_id" > "$kimi_state_file"; then
-      printf 'Error: could not save Kimi session state at %s\n' "$kimi_state_file" >&2
-      return 5
-    fi
-  fi
   return "$kimi_status"
 }
 
-prepare_kimi_workspace
-kimi_repo="$kimi_workspace/repo"
-kimi_scope="${scope//$repo_root/$kimi_repo}"
-kimi_focus="${focus//$repo_root/$kimi_repo}"
-IFS= read -r -d '' kimi_prompt <<EOF || true
-You are the independent external reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. You may use built-in Kimi subagents, but do not invoke kimi-gated-development.
+if [[ "$review_with_kimi" -eq 1 ]]; then
+  if ! prepare_kimi_workspace; then
+    printf 'Warning: optional Kimi snapshot setup failed; continuing with Claude only\n' >&2
+    review_with_kimi=0
+  fi
+fi
+if [[ "$review_with_kimi" -eq 1 ]]; then
+  kimi_repo="$kimi_workspace/repo"
+  kimi_scope="${full_scope//$repo_root/$kimi_repo}"
+  kimi_focus="${kimi_focus_arg//$repo_root/$kimi_repo}"
+  IFS= read -r -d '' kimi_prompt <<EOF || true
+You are an optional specialist reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. You may use built-in Agent and AgentSwarm subagents. Do not invoke external reviewers or review-gate workflows, including Claude Code, Codex, CodeSearch, external model CLIs, or gate skills.
 
 Repository snapshot: $kimi_repo
 Review mode: $mode
 Scope contract: $kimi_scope
 Precomputed review bundle: $kimi_workspace/review-scope.txt
+Kimi risk classes: $kimi_risk_list
 Review focus: $kimi_focus
 Review lens: $lens
 
@@ -485,7 +498,7 @@ Read the precomputed review bundle first, then inspect applicable CLAUDE.md and 
 
 Return:
 1. Scope examined: exact refs, diffs, and files reviewed.
-2. Blocking findings: only valid correctness, security, look-ahead, sizing, spec-violation, or other material defects. Give priority, file:line, evidence, impact, and the smallest sound remedy.
+2. Blocking findings: only reproducible material defects within the requested Kimi risk classes. Give priority, file:line, evidence, impact, and the smallest sound remedy.
 3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
 4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
 
@@ -493,26 +506,34 @@ End with exactly one machine-readable line: VERDICT: PASS, VERDICT: NEEDS REVISI
 
 If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
 
-This conversation may include earlier review gates from the same task. Use that context for continuity, but treat this invocation's review bundle and repository snapshot files as authoritative.
+Treat this invocation's full review bundle and repository snapshot files as authoritative.
 EOF
+fi
 claude_report="$review_tmp/claude-report.txt"
 kimi_report="$review_tmp/kimi-report.txt"
 
 set +e
 run_claude_review > "$claude_report" 2>&1 &
 claude_pid=$!
-run_kimi_review > "$kimi_report" 2>&1 &
-kimi_pid=$!
+if [[ "$review_with_kimi" -eq 1 ]]; then
+  run_kimi_review > "$kimi_report" 2>&1 &
+  kimi_pid=$!
+fi
 wait "$claude_pid"
 claude_status=$?
-wait "$kimi_pid"
-kimi_status=$?
+kimi_status=0
+if [[ "$review_with_kimi" -eq 1 ]]; then
+  wait "$kimi_pid"
+  kimi_status=$?
+fi
 set -e
 
 printf '=== Claude review ===\n'
 cat "$claude_report"
-printf '=== Kimi review ===\n'
-cat "$kimi_report"
+if [[ "$review_with_kimi" -eq 1 ]]; then
+  printf '=== Kimi optional review ===\n'
+  cat "$kimi_report"
+fi
 
 after_fingerprint="$(repo_fingerprint)"
 if [[ "$before_fingerprint" != "$after_fingerprint" ]]; then
@@ -524,8 +545,9 @@ if [[ "$claude_status" -eq 0 ]] && ! grep -q '[^[:space:]]' "$claude_report"; th
   printf 'Error: Claude produced no review output; gate failed\n' >&2
   claude_status=6
 fi
-if [[ "$kimi_status" -eq 0 ]] && ! grep -q '[^[:space:]]' "$kimi_report"; then
-  printf 'Error: Kimi produced no review output; gate failed\n' >&2
+if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -eq 0 ]] &&
+   ! grep -q '[^[:space:]]' "$kimi_report"; then
+  printf 'Warning: optional Kimi produced no review output\n' >&2
   kimi_status=6
 fi
 
@@ -549,16 +571,17 @@ if [[ "$claude_status" -eq 0 ]] && ! has_review_verdict "$claude_report"; then
   printf 'Error: Claude produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
   claude_status=6
 fi
-if [[ "$kimi_status" -eq 0 ]] && ! has_review_verdict "$kimi_report"; then
-  printf 'Error: Kimi produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
+if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -eq 0 ]] &&
+   ! has_review_verdict "$kimi_report"; then
+  printf 'Warning: optional Kimi produced no valid PASS or NEEDS REVISION verdict\n' >&2
   kimi_status=6
 fi
 
 if [[ "$claude_status" -ne 0 ]]; then
   exit "$claude_status"
 fi
-if [[ "$kimi_status" -ne 0 ]]; then
-  exit "$kimi_status"
+if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -ne 0 ]]; then
+  printf 'Warning: optional Kimi review did not complete; Claude remains the gate\n' >&2
 fi
 
 if [[ -n "$reviewed_state_file" && -n "$base_oid" && -z "$status" ]]; then

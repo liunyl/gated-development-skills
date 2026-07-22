@@ -1,180 +1,115 @@
 ---
 name: claude-gated-development
-description: Use when a concrete complexity or high-risk trigger requires concurrent independent Claude + Kimi review; always use for a real quant strategy backtest before its first run.
+description: Use when engineering or quant work crosses module or integration boundaries, involves ambiguous architecture, concurrency, security, destructive data, financial logic, a real backtest, or failure modes that are hard to verify locally.
 ---
 
 # Claude-Gated Development
 
-## Overview
+## Core policy
 
-External review is exceptional, not the default. Local, reversible, single-path work with an obvious implementation and direct check skips external review. When a concrete complexity or high-risk trigger applies, do not advance an artifact until concurrent independent Claude + Kimi review has cleared it. For quant work, review the backtest code before its first real run.
+Route by concrete risk, not diff size. Skip external review for local, reversible, single-path work with an obvious implementation and direct check.
 
-**Core principle:** Route by concrete risk, not diff size. The default is to skip external review; a triggered review is a strict dual-review gate. Triage every finding: fix valid findings, rebut invalid findings with technical evidence, and escalate ambiguous findings or conflicts with user decisions. Never implement every comment blindly, and never stop because a reviewer is inconvenient.
+For triggered work, use Claude as the sole mandatory external gate. Use Kimi only as an optional specialist second opinion for concurrency, idempotency, database transactions, tenant isolation, or distributed-state risks. Kimi may use its built-in subagents, but must not call Claude, Codex, CodeSearch, another external model, or another review-gate workflow. Kimi availability, quota, transport failure, or missing verdict never blocks the Claude gate. Never ignore a valid Kimi finding merely because Kimi is optional.
 
-Use two modes:
+For a real quant strategy, review the playbook and backtest code before the first real run.
 
-- **Complex engineering:** plan → concurrent Claude + Kimi gate → implement → verify → concurrent Claude + Kimi gate.
-- **Quant backtest:** study → playbook + code → concurrent Claude + Kimi gate → first real run.
-
-**Codex CLI only.** This skill's reviewers are Claude and Kimi — it is Codex's gate, not an orchestrator for other agents. It must never be adopted by Kimi Code, Claude Code, or any other agent; it installs to Codex's private `~/.codex/skills/`, which they do not scan.
-
-## Reviewer command
+## Commands
 
 Run from the repository root:
 
 ```bash
 RUNNER="${CODEX_HOME:-$HOME/.codex}/skills/claude-gated-development/scripts/claude-review.sh"
+
+"$RUNNER" adversarial --focus "Challenge the spec and plan at <path>."
+"$RUNNER" code --base <commit-before-task> --focus "Review the final implementation against <plan path>."
+"$RUNNER" code --base <commit-before-task> --since <previous-reviewed-head> \
+  --focus "Re-check prior findings and review the committed fixes."
 ```
 
-Use:
+Add one narrow Kimi pass only for the specialist risks above:
 
 ```bash
-"$RUNNER" adversarial --focus "Review the spec and plan at <path>; challenge the approach, assumptions, omissions, and repo fit."
-"$RUNNER" adversarial --base <commit-before-task> --focus "Review <artifact paths> and the full task diff."
-"$RUNNER" code --base <commit-before-task> --focus "Review the final implementation against <plan path>."
-"$RUNNER" code --base <commit-before-task> --since <previous-reviewed-head> --focus "Re-check the prior findings and review the committed fixes."
+"$RUNNER" code --base <commit-before-task> \
+  --focus "Review the complete final implementation." \
+  --kimi-risk concurrency \
+  --kimi-risk idempotency \
+  --kimi-risk tenant-isolation
 ```
 
-The wrapper runs Claude and Kimi concurrently against the same captured Git scope. It reuses one persistent session per reviewer for the same Codex task and repository, keyed by `CODEX_THREAD_ID`. Set `CLAUDE_REVIEW_SESSION_KEY` to override the task key; without either key it keeps the old fresh, non-persistent behavior. Session continuity trades cold-start independence for less repeated context loading: each reviewer remains independent from the implementer, but later gates retain its earlier review context. If a saved Claude session cannot resume, the wrapper retries once with a new Claude session and the full task bundle. Kimi resumes only by an explicit saved session ID; a failed resume blocks the current gate, clears that ID, and makes the next invocation a fresh full review. Each report must end with an explicit `PASS` or `NEEDS REVISION` verdict; `SKIPPED` or an unrecognized verdict fails the invocation and cannot advance its checkpoint.
+The default command invokes only Claude. Repeat `--kimi-risk` for `concurrency`, `idempotency`, `database-transactions`, `tenant-isolation`, or `distributed-state`. This runs a fresh Kimi review concurrently against the full task snapshot. Kimi may use `Agent` and `AgentSwarm` internally; an empty skill directory and the review prompt prohibit chaining to external reviewers or review gates. Claude reviews through a read-only tool surface; Kimi cannot read or write the live worktree. Any detected repository mutation fails the command.
 
-Claude uses `dontAsk` plus an explicit read-only tool surface. The wrapper precomputes the current Git scope into a temporary review bundle, removes Bash and file-edit tools, and keeps only `Read`, `Glob`, `Grep`, `Skill`, and `Agent`. Among skills it denies only `Skill(codex-gated-development)` to prevent recursive cross-model review. Claude may still spawn its own subagents and use other skills within the same read-only surface. Kimi receives a task-scoped snapshot containing tracked and unignored untracked files; symlinks and gitlinks become inert markers. It starts with an explicit empty `--skills-dir`, which hides auto-discovered skills including `kimi-gated-development`; Kimi may still use its built-in subagents. On macOS, the wrapper also requires native `sandbox-exec` and runs Kimi under a profile that denies all reads and writes to the canonical live worktree and its Git directories while leaving normal network and cache access available. It clears `OLDPWD` and exported `GIT_*` variables before launch. The wrapper disables user/project/plugin hooks, skill shell expansion, and MCP servers for the Claude invocation, rejects empty review targets, and fingerprints the live repository before and after both reviewers run. Any missing or failed reviewer, unavailable native sandbox, or detected live-repository mutation fails the gate. Review calls for one task are serial; start a new Codex task or set a different session key when the task changes.
+Each completed report must end with `VERDICT: PASS` or `VERDICT: NEEDS REVISION`. Claude failure, missing output, or an invalid verdict blocks the gate. Optional Kimi failures produce warnings only.
 
-Managed-policy hooks cannot be disabled by a session-level setting. If an untrusted managed hook is configured, do not run the reviewer against the live repository; report the gate blocked. A mutation failure detects but does not undo external changes.
+Persistent review sessions are keyed by `CODEX_THREAD_ID`, or explicitly by `--session-key`. A first review is full-scope; later committed fixes may use `--since`.
 
-If `claude` or `kimi` is missing, unauthenticated, or cannot complete the review, or if native macOS `sandbox-exec` is unavailable, the gate is blocked. Report the failure; do not replace the independent gate with self-review.
+## Route the task
 
-## When to use
-
-First route the task. Skip external review when the work is local, reversible, single-path, has an obvious implementation, and has a direct check. If no concrete trigger below applies, skip the gate.
-
-Require the complexity-routed Claude + Kimi gate when the work has any of these triggers:
+Require the Claude gate for any of these triggers:
 
 - Cross-module design or an integration boundary.
-- Ambiguous tradeoffs that need independent challenge.
+- Ambiguous architectural tradeoffs.
 - Concurrency, security, or destructive data work.
-- Financial or quant logic, including any real strategy backtest.
+- Financial or quant logic, including a real strategy backtest.
 - Failure modes that are hard to verify locally.
 
-Diff size alone is not a trigger. A local one-line change to cost, slippage, risk sizing, stop/target, fill, signal timing, bar offsets, look-ahead, session timezone, aggressor polarity, data selection, rolling windows, field references, or config-valued strings has financial/quant risk and remains triggered. A typo, comment, or pure prose edit has no trigger and skips the gate.
+Diff size is not a trigger by itself. Tiny changes to cost, slippage, sizing, fills, signal timing, offsets, look-ahead, timezone, polarity, data selection, or rolling windows remain gated because their risk is financial. Typos, comments, and pure prose edits skip the gate.
 
-## The shared gate
+## Review the real scope
 
-Claude and Kimi review repository state, so write plans, specs, and playbooks to files first. Untracked files count.
+Write plans, specs, and playbooks to files before review. Untracked files count.
 
-The reviewed scope must be non-empty and contain the artifact's actual substance, not only a filename, comment, docstring, or whitespace hunk. Before accepting a pass, inspect the scope yourself:
+- For uncommitted work, review the complete staged, unstaged, and relevant untracked state.
+- Once any task artifact is committed, use `--base <commit-before-task>` so the review covers the full task diff plus working-tree changes.
+- Treat an empty target, partial hunk, or `SKIPPED` verdict as a failed Claude gate.
 
-- For an uncommitted artifact, use the default working-tree review and confirm `git status --short --untracked-files=all`, staged diff, unstaged diff, and relevant untracked files contain the substance.
-- If any task artifact has been committed, find the commit before the task and use `--base <commit-before-task>`. The review must cover the full branch diff plus current working-tree changes.
-- An empty review, “nothing to review,” or a partial/decoy hunk is a skipped gate, not a clean pass.
+## Engineering workflow
 
-For every dual gate:
+1. Write the spec and implementation plan when the approach is not already fixed.
+2. Run one Claude `adversarial` planning gate before coding.
+3. Implement and run current verification.
+4. Simplify and perform the normal Codex PR review.
+5. Run one Claude `code` gate on the complete final diff.
+6. Finish the branch only after the latest Claude turn clears the final state.
 
-1. Write the artifact or ensure the complete code diff exists.
-2. Run `claude-review.sh adversarial` for plans/designs or `claude-review.sh code` for final code. The wrapper runs Claude and Kimi concurrently; point `--focus` at exact artifact paths and risks.
-3. Triage both reports using `superpowers:receiving-code-review`:
-   - Valid for this codebase: fix it.
-   - Wrong, YAGNI, duplicate, or inapplicable: record a technical rebuttal; do not implement it.
-   - Ambiguous or conflicting with a user decision: escalate to the user.
-4. Commit valid fixes, then re-run the concurrent Claude + Kimi review with the saved `HEAD` as `--since`; use a full rerun when there is no new commit.
-5. Clear the gate only when both new reviewer turns see the final state and both surface no valid, unaddressed blocking finding.
+When the task contains a Kimi specialist risk, add the matching `--kimi-risk` values at the relevant planning or final gate. Do not request a broad second review. If Kimi returns a valid blocking finding, fix it and re-check that risk; if Kimi cannot complete, continue using Claude as the gate.
 
-Any mutation after a clearing pass reopens the dual gate, including a rename, comment, constant, or cleanup. The clearing reviews must be the last operations that change the artifact before it advances.
+## Triage and convergence
 
-### Commit-scoped incremental reruns
+Use `superpowers:receiving-code-review` to classify every finding:
 
-The first round for each review mode is a full review. Planning (`adversarial`) and final code (`code`) keep separate successful-review checkpoints, so a planning pass never narrows the first final-code review.
+- Fix findings supported by the repository, specification, or reproducible behavior.
+- Record technical evidence for wrong, duplicate, YAGNI, or inapplicable findings.
+- Escalate ambiguity or conflict with a user decision.
 
-After both reviewers finish a round, save its committed `HEAD`:
+Separate blocking defects from residual style, alternatives, and speculative hardening. Clear the gate only when the newest Claude review sees the final state and has no valid unaddressed blocker. Any later artifact mutation reopens the Claude gate.
 
-```bash
-PREVIOUS_REVIEW_HEAD="$(git rev-parse HEAD)"
-```
+For incremental reruns, save the reviewed commit, commit the fixes, then use the same task base, session key, mode, and `--since`. Omit `--since` for an evidence-only rebuttal or after rewritten history.
 
-Commit the fixes before an incremental rerun. Then reuse the same task base, session key, and review mode:
+## Quant backtest workflow
 
-```bash
-"$RUNNER" code \
-  --base "$TASK_BASE" \
-  --since "$PREVIOUS_REVIEW_HEAD" \
-  --focus "Re-check the prior blocking findings and review the committed fixes."
-```
-
-An active incremental round sends the commits and binary patch from `--since` to current `HEAD`, plus a stat and file-name summary of the full task. The persistent reviewer conversation supplies the earlier findings; reviewers may still inspect affected final files, callers, and tests when needed.
-
-Use `--since` only for later rounds of the same gate. It requires a clean worktree and non-empty committed delta. The wrapper also verifies that both reviewer sessions exist, the per-mode checkpoint covers the supplied commit, the task base is unchanged, and history has not been rewritten. Missing or mismatched state falls back to a full review; invalid ancestry, an empty delta, or uncommitted changes fail before reviewers start. If a round needs only an evidence-based rebuttal and no new commit exists, omit `--since` and run a full review.
-
-### Convergence discipline
-
-- Split findings into **blocking** (correctness, look-ahead, sizing, spec violation, security) and **residual** (style, optional alternatives, speculative hardening).
-- Presume correctness, look-ahead, sizing, and security findings valid until code evidence disproves them. Never relabel them residual to end the loop.
-- Clear the gate when both new reviewer turns have no valid unaddressed blocking finding. Record residuals instead of chasing literally empty reports.
-- Require monotone progress. If a fix introduces a new blocking defect, or the blocking set fails to shrink for about three rounds, stop and escalate to the user. Do not silently ship an unconverged gate.
-
-## Engineering Mode
-
-| Phase | Action | Gate |
-|---|---|---|
-| 1. Spec + plan | Use `superpowers:brainstorming` when requirements are not already crisp; write the approved spec/design and implementation plan to files. | — |
-| 2. **Dual planning gate** | Run `claude-review.sh adversarial` on the complete plan; converge concurrent Claude + Kimi review. | Required before code |
-| 3. Implement | Use `superpowers:subagent-driven-development` or `superpowers:executing-plans`, as applicable. | — |
-| 4. Verify | Use `superpowers:verification-before-completion`; run the relevant tests and checks with current output. | — |
-| 5. Simplify/review | Use `code-simplifier:code-simplifier` on the complete task diff, then use `pr-review-toolkit:review-pr`; triage findings and rerun affected validation after fixes. | Required before final dual gate |
-| 6. **Dual final gate** | Run `claude-review.sh code` on the complete final diff; converge concurrent Claude + Kimi review. | Required before done |
-| 7. Finish | Use `finish-pr` for audit/drafting, then `superpowers:finishing-a-development-branch` when working on a branch. | — |
-
-Complex engineering has exactly one dual planning gate and one dual final gate. Both Claude and Kimi reports must clear each gate before the artifact advances.
-
-## Quant Backtest Mode
-
-| Phase | Action | Gate |
-|---|---|---|
-| 1. Study | Characterize only the raw phenomenon: base rates and forward-return distribution/asymmetry. Do not simulate strategy entries, stops, targets, P&L, R-multiples, or t-stats. Stop if the base phenomenon is uninteresting. | — |
-| 2. Playbook | Write `strategies/<name>/playbook.md` with thesis, exact signal, entry on next-bar open, stop, target/exit, parameters, and universe. Leave results/verdict TBD. | — |
-| 3. Backtest code | Write `strategies/<name>/backtest.py` on `strategies/common/harness.py`; inherit the realistic `CostModel`, fixed 0.5%-risk sizing, 10× cap, and R-multiple/t-stat metrics. Analyze on NQ, execute on MNQ. | — |
-| 4. Pre-run Claude + Kimi gate | Run `claude-review.sh adversarial` on playbook and code together. Focus on look-ahead, next-bar fills, aggressor polarity, session timezone, degraded data, sizing/costs, and playbook fidelity. Both reports must clear. | Required before first real run |
-| 5. Run | Run the real backtest only after the gate clears. | — |
-| 6. Read skeptically | Evaluate full-sample net P&L, R-multiple t-stat, and per-year consistency. Treat the strategy as holding only when year behavior is consistent and t > 2. | — |
-| 7. Robustness | Test parameter plateaus, micro-contract/2× slippage costs, and the pre/post-2024 OOS split. | — |
-| 8. Verdict | Write the honest verdict into the playbook, including “not robust” when warranted. | — |
-
-Any signal-timing, fill, aggressor-sign, or session-timezone logic shared by the study and backtest remains gated in Phase 4. A study result never pre-clears that code and is not evidence for rebutting a Phase-4 finding.
+1. Study the raw phenomenon without simulating strategy P&L.
+2. Write the exact playbook and backtest code.
+3. Run the Claude `adversarial` gate on both before the first real run, focusing on look-ahead, next-bar fills, polarity, timezone, degraded data, sizing, costs, and playbook fidelity.
+4. Run the backtest only after Claude clears it.
+5. Evaluate net results, t-statistics, yearly consistency, parameter plateaus, costs, and out-of-sample behavior honestly.
 
 ## Rationalizations to reject
 
 | Excuse | Reality |
 |---|---|
-| “It is one line; skip the gate.” | Tiny changes to offsets, signs, costs, and comparisons carry maximal bug surface. |
-| “I fixed everything; a re-run is unnecessary.” | Fixes are unreviewed until Claude and Kimi see the resulting state. |
-| “The gate cleared before this final cleanup.” | A post-gate mutation ships state the gate never reviewed. Re-run or revert it. |
-| “Run the backtest first to see whether it has legs.” | A look-ahead, fill, polarity, timezone, or sizing bug can manufacture the result and bias later review. |
-| “The study already showed the edge.” | Ungated study output can contain the same causal bug and cannot rebut the independent code review. |
-| “Claude or Kimi always finds something.” | Triage findings; require each reviewer's blocking findings to reach zero, not either report to become empty. |
-| “Loop until Claude emits nothing.” | Log residuals. Escalate if the blocking set stops shrinking. |
-| “Implement every Claude comment to be safe.” | Blind implementation breaks working code and prevents convergence. |
-| “Self-review makes Claude and Kimi redundant.” | Reviews sharing the implementer's reasoning are not independent; the external reviewer sessions are the adversaries. |
-| “The plan is obvious.” | A triggered complex task still needs its one dual planning gate before code. |
-| “The deadline requires skipping steps.” | Time pressure does not waive a triggered dual gate. |
-
-## Red flags
-
-Stop and run the missing gate when:
-
-- A triggered implementation is about to start without a cleared Claude + Kimi planning gate.
-- A real backtest is about to run before Claude and Kimi review the playbook and backtest code.
-- Triggered work is about to be declared complete without current verification and a final Claude + Kimi gate.
-- A Claude or Kimi finding is being implemented without checking it against the repository.
-- A review loop is ending from fatigue instead of a triaged zero-blocking result.
-- The artifact changed after the last clearing Claude + Kimi reviews.
+| “Claude passed earlier.” | A later mutation is unreviewed; rerun Claude or revert it. |
+| “Kimi failed, so delivery is blocked.” | Kimi is advisory; Claude alone owns the gate. |
+| “Kimi is optional, so ignore its bug.” | Optional sourcing does not make valid evidence optional. |
+| “It is one line.” | Small financial, security, and concurrency changes can carry maximal risk. |
+| “Run the backtest first.” | A causal bug can manufacture the result and bias later review. |
 
 ## Quick reference
 
-- Complexity decision: skip unless a concrete trigger applies.
-- Dual planning/design gate: `claude-review.sh adversarial` (concurrent Claude + Kimi).
-- Codex simplification pass: `code-simplifier:code-simplifier`.
-- Codex PR review: `pr-review-toolkit:review-pr`.
-- Dual final code gate: `claude-review.sh code` (concurrent Claude + Kimi).
-- Full task/branch scope: add `--base <commit-before-task>`.
-- Reviewer focus: add `--focus "<artifact paths and risk classes>"`.
-- Triage: `superpowers:receiving-code-review`.
-- Verify: `superpowers:verification-before-completion`.
-- Finish: `finish-pr`, then `superpowers:finishing-a-development-branch` when applicable.
+- Mandatory planning gate: `claude-review.sh adversarial`.
+- Mandatory final gate: `claude-review.sh code`.
+- Optional specialist review: add one or more supported `--kimi-risk` values.
+- Kimi may delegate internally, must not chain external review gates, and is operationally non-blocking.
+- Full task scope: add `--base <commit-before-task>`.
+- Incremental fix scope: add `--since <previous-reviewed-head>`.
+- Verification: use `superpowers:verification-before-completion`.
+- Finish: use `finish-pr`, then `superpowers:finishing-a-development-branch` when applicable.

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Complexity-Routed Claude + Kimi Review"
-  short_description: "Skip simple work; dual-review concrete complex or high-risk work"
-  default_prompt: "Use $claude-gated-development to route this task: skip external review unless a concrete complexity or high-risk trigger requires concurrent Claude + Kimi gates."
+  display_name: "Complexity-Routed Claude Review"
+  short_description: "Gate risky work with Claude; add focused Kimi when useful"
+  default_prompt: "Use $claude-gated-development to route and review this task according to its concrete risk."

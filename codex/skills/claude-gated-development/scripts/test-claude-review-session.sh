@@ -11,6 +11,17 @@ fail() {
   exit 1
 }
 
+cat > "$tmp/bin/mkdir" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ -n "${FAIL_KIMI_SETUP:-}" && "$arg" == */kimi-workspace* ]]; then
+    exit 42
+  fi
+done
+exec /bin/mkdir "$@"
+EOF
+chmod +x "$tmp/bin/mkdir"
+
 cat > "$tmp/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 if [[ -t 0 || -p /dev/stdin ]]; then
@@ -25,11 +36,13 @@ call_no="$(($(wc -l < "$CLAUDE_LOG") + 1))"
 cp "$bundle_path" "$BUNDLE_CAPTURE/claude-$call_no.txt"
 [[ -z "${MUTATE_FILE:-}" ]] || chmod 400 "$MUTATE_FILE"
 : > "$CLAUDE_STARTED"
-for _ in {1..100}; do
-  [[ -e "$KIMI_STARTED" ]] && break
-  sleep 0.02
-done
-[[ -e "$KIMI_STARTED" ]] || exit 8
+if [[ -n "${EXPECT_KIMI:-}" ]]; then
+  for _ in {1..100}; do
+    [[ -e "$KIMI_STARTED" ]] && break
+    sleep 0.02
+  done
+  [[ -e "$KIMI_STARTED" ]] || exit 8
+fi
 printf 'CALL' >> "$CLAUDE_LOG"
 shift
 printf '\t%q' "$@" >> "$CLAUDE_LOG"
@@ -105,6 +118,9 @@ done
 [[ -d "$skills_dir" ]] || exit 24
 [[ -z "$(find "$skills_dir" -mindepth 1 -print -quit)" ]] || exit 25
 [[ "$review_prompt" == *'End with exactly one machine-readable line: VERDICT: PASS'* ]] || exit 26
+[[ "$review_prompt" == *'You may use built-in Agent and AgentSwarm subagents.'* ]] || exit 27
+[[ "$review_prompt" == *'Do not invoke external reviewers or review-gate workflows'* ]] || exit 34
+[[ "$review_prompt" == *'concurrency, idempotency, database-transactions'* ]] || exit 28
 call_no="$(($(wc -l < "$KIMI_LOG") + 1))"
 cp "$PWD/review-scope.txt" "$BUNDLE_CAPTURE/kimi-$call_no.txt"
 printf 'CALL\tcwd=%q' "$PWD" >> "$KIMI_LOG"
@@ -164,6 +180,9 @@ run_review() {
     LIVE_REPO="$live_repo"
     CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started"
   )
+  if [[ "${INCLUDE_KIMI:-1}" -eq 1 && "${EXPECT_KIMI_START:-1}" -eq 1 ]]; then
+    review_env+=(EXPECT_KIMI=1)
+  fi
   if [[ -L "$repo/external-link" && -d "$repo/submodule" ]]; then
     review_env+=(EXPECT_SNAPSHOT_TYPES=1)
   fi
@@ -181,6 +200,17 @@ run_review() {
   fi
   rm -f "$tmp/claude.started" "$tmp/kimi.started"
   runner_args=("$mode" --focus test)
+  if [[ "${INCLUDE_KIMI:-1}" -eq 1 ]]; then
+    if [[ "${INVALID_KIMI_RISK:-0}" -eq 1 ]]; then
+      runner_args+=(--kimi-risk security)
+    else
+      runner_args+=(
+        --kimi-risk concurrency
+        --kimi-risk idempotency
+        --kimi-risk database-transactions
+      )
+    fi
+  fi
   if (($# > 3)); then
     runner_args+=("${@:4}")
   fi
@@ -241,6 +271,33 @@ git -C "$repo_a" commit -qm 'add snapshot type fixtures'
 : > "$tmp/claude.log"
 : > "$tmp/kimi.log"
 
+mv "$tmp/home/.kimi-code/bin/kimi" "$tmp/home/.kimi-code/bin/kimi.off"
+if ! (cd "$repo_a" && INCLUDE_KIMI=0 run_review "$repo_a" claude-only); then
+  mv "$tmp/home/.kimi-code/bin/kimi.off" "$tmp/home/.kimi-code/bin/kimi"
+  fail 'Claude-only default required Kimi'
+fi
+mv "$tmp/home/.kimi-code/bin/kimi.off" "$tmp/home/.kimi-code/bin/kimi"
+[[ ! -s "$tmp/kimi.log" ]] || fail 'Claude-only default invoked Kimi'
+: > "$tmp/claude.log"
+: > "$tmp/kimi.log"
+
+if (cd "$repo_a" && INVALID_KIMI_RISK=1 run_review "$repo_a" invalid-kimi-risk); then
+  fail 'unsupported Kimi risk was accepted'
+fi
+[[ ! -s "$tmp/claude.log" && ! -s "$tmp/kimi.log" ]] || fail 'unsupported Kimi risk started a reviewer'
+
+FAIL_KIMI_SETUP=1; export FAIL_KIMI_SETUP
+if ! (cd "$repo_a" && EXPECT_KIMI_START=0 run_review "$repo_a" kimi-setup-failure); then
+  unset FAIL_KIMI_SETUP
+  fail 'optional Kimi setup failure blocked Claude'
+fi
+unset FAIL_KIMI_SETUP
+[[ "$(wc -l < "$tmp/claude.log")" -eq 1 ]] || fail 'Claude did not run after optional Kimi setup failure'
+[[ ! -s "$tmp/kimi.log" ]] || fail 'Kimi started after its snapshot setup failed'
+grep -Fq 'optional Kimi snapshot setup failed' "$tmp/review.stderr" || fail 'Kimi setup failure warning was omitted'
+: > "$tmp/claude.log"
+: > "$tmp/kimi.log"
+
 (cd "$repo_a" && run_review "$repo_a" task-a)
 (cd "$repo_a" && run_review "$repo_a" task-a)
 first_id="$(session_id_from 1)"
@@ -252,12 +309,12 @@ first_id="$(session_id_from 1)"
 [[ "$(sed -n '2p' "$tmp/claude.log")" == *--strict-mcp-config* ]] || fail 'resume omitted strict MCP config'
 [[ "$(sed -n '2p' "$tmp/claude.log")" == *disableAllHooks* ]] || fail 'resume omitted hook lockdown'
 [[ "$(sed -n '1p' "$tmp/kimi.log")" != *--session* ]] || fail 'first Kimi review unexpectedly resumed a session'
-[[ "$(sed -n '2p' "$tmp/kimi.log")" == *--session*session_fake_review_id* ]] || fail 'second Kimi review did not resume the explicit session'
+[[ "$(sed -n '2p' "$tmp/kimi.log")" != *--session* ]] || fail 'second Kimi review reused a session'
 [[ "$(sed -n '2p' "$tmp/kimi.log")" != *--continue* ]] || fail 'Kimi review used unsafe implicit continuation'
 [[ "$(sed -n '1p' "$tmp/claude.log")" == *--allowedTools*Agent* ]] || fail 'Claude reviewer lost its own subagent tool'
 [[ "$(sed -n '1p' "$tmp/claude.log")" == *codex-gated-development* ]] || fail 'Claude reviewer gate skill was not denied'
 kimi_task_a_cwd="$(sed -n '1s/^CALL\tcwd=\([^[:space:]]*\).*/\1/p' "$tmp/kimi.log")"
-[[ -n "$kimi_task_a_cwd" && "$(sed -n '2p' "$tmp/kimi.log")" == *"cwd=$kimi_task_a_cwd"* ]] || fail 'same task did not reuse Kimi workspace'
+[[ -n "$kimi_task_a_cwd" && "$(sed -n '2p' "$tmp/kimi.log")" != *"cwd=$kimi_task_a_cwd"* ]] || fail 'optional Kimi review reused a workspace'
 [[ "$kimi_task_a_cwd" != "$repo_a" ]] || fail 'Kimi reviewed the live worktree'
 
 FAIL_RESUME_MARKER="$tmp/failed-resume"; export FAIL_RESUME_MARKER
@@ -297,25 +354,15 @@ last_line="$(tail -n 1 "$tmp/claude.log")"
 [[ ! -e "$repo_a/.sandbox-write" ]] || fail 'Kimi wrote an ignored live-worktree file'
 [[ ! -e "$repo_a/.git/sandbox-write" ]] || fail 'Kimi wrote live Git state'
 
-marker_key="marker-write-failure"
-marker_repo="$(git -C "$repo_a" rev-parse --show-toplevel)"
-marker_hash="$(printf '%s\0%s' "$marker_repo" "$marker_key" | git -C "$repo_a" hash-object --stdin)"
-marker_path="$tmp/home/.cache/claude-gated-development/kimi-review-workspaces/$marker_hash/.successful-review"
-mkdir -p "$marker_path"
-if (cd "$repo_a" && run_review "$repo_a" "$marker_key"); then
-  fail 'Kimi marker write failure did not fail the gate'
-fi
-rm -rf "$marker_path"
-
 rm -f "$tmp/relative-kimi.started"
 (cd "$repo_a" && run_review "$repo_a" relative-path relative-path)
 [[ -e "$tmp/relative-kimi.started" ]] || fail 'relative PATH Kimi was not invoked'
 
 FAIL_KIMI=1; export FAIL_KIMI
-if (cd "$repo_a" && run_review "$repo_a" task-a); then
+(cd "$repo_a" && run_review "$repo_a" task-a) || {
   unset FAIL_KIMI
-  fail 'Kimi failure did not fail the gate'
-fi
+  fail 'optional Kimi failure blocked Claude'
+}
 unset FAIL_KIMI
 
 readonly_state_dir="$(git -C "$repo_c" rev-parse --path-format=absolute --git-common-dir)/claude-review-sessions"
@@ -359,10 +406,10 @@ if (cd "$repo_a" && run_review "$repo_a" unrecognized-claude-verdict); then
 fi
 unset UNRECOGNIZED_CLAUDE_VERDICT
 
-if (cd "$repo_a" && NO_KIMI_LAST_MESSAGE=1 run_review "$repo_a" no-kimi-report); then
+(cd "$repo_a" && NO_KIMI_LAST_MESSAGE=1 run_review "$repo_a" no-kimi-report) || {
   unset NO_KIMI_LAST_MESSAGE
-  fail 'empty Kimi report did not fail the gate'
-fi
+  fail 'empty optional Kimi report blocked Claude'
+}
 unset NO_KIMI_LAST_MESSAGE
 
 mut_target="$repo_a/untracked-mode.txt"
@@ -395,17 +442,15 @@ git -C "$repo_incremental" commit -qm 'add review fix'
 
 claude_incremental="$tmp/bundles/claude-$(awk 'END { print NR }' "$tmp/claude.log").txt"
 kimi_incremental="$tmp/bundles/kimi-$(awk 'END { print NR }' "$tmp/kimi.log").txt"
-for bundle in "$claude_incremental" "$kimi_incremental"; do
-  grep -Fq 'NEW_PATCH_BODY' "$bundle" || fail 'incremental bundle omitted the new commit body'
-  ! grep -Fq 'OLD_PATCH_BODY' "$bundle" || fail 'incremental bundle repeated an old patch body'
-  grep -Fq '## Full task summary' "$bundle" || fail 'incremental bundle omitted the full-task summary'
-done
+grep -Fq 'NEW_PATCH_BODY' "$claude_incremental" || fail 'Claude incremental bundle omitted the new commit body'
+! grep -Fq 'OLD_PATCH_BODY' "$claude_incremental" || fail 'Claude incremental bundle repeated an old patch body'
+grep -Fq '## Full task summary' "$claude_incremental" || fail 'Claude incremental bundle omitted the full-task summary'
+grep -Fq 'NEW_PATCH_BODY' "$kimi_incremental" || fail 'Kimi full bundle omitted the new commit body'
+grep -Fq 'OLD_PATCH_BODY' "$kimi_incremental" || fail 'Kimi did not receive the full task'
 
 incremental_hash="$(session_hash_for "$repo_incremental" incremental-task)"
 incremental_state="$(git -C "$repo_incremental" rev-parse --path-format=absolute --git-common-dir)/claude-review-sessions/$incremental_hash.adversarial.reviewed"
-[[ "$(cat "$incremental_state")" == "$task_base $(git -C "$repo_incremental" rev-parse HEAD)" ]] || fail 'joint review checkpoint was not recorded'
-kimi_incremental_state="$tmp/home/.cache/claude-gated-development/kimi-review-workspaces/$incremental_hash/.successful-review"
-[[ "$(cat "$kimi_incremental_state")" == session_fake_review_id ]] || fail 'Kimi explicit session ID was not recorded'
+[[ "$(cat "$incremental_state")" == "$task_base $(git -C "$repo_incremental" rev-parse HEAD)" ]] || fail 'Claude review checkpoint was not recorded'
 
 review_calls_before="$(($(wc -l < "$tmp/claude.log") + $(wc -l < "$tmp/kimi.log")))"
 if (cd "$repo_incremental" && run_review "$repo_incremental" invalid-no-base "" --since "$previous_review_head"); then
@@ -456,25 +501,6 @@ git -C "$repo_incremental" commit -qm 'add changed base fixture'
   --base "$changed_base" --since "$changed_base_previous")
 grep -Fq 'NEW_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'changed task base did not force a full review'
 
-stale_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
-printf 'STALE_SESSION_BODY\n' > "$repo_incremental/stale.txt"
-git -C "$repo_incremental" add stale.txt
-git -C "$repo_incremental" commit -qm 'add stale session fixture'
-checkpoint_before_kimi_failure="$(cat "$incremental_state")"
-FAIL_KIMI_RESUME=1; export FAIL_KIMI_RESUME
-if (cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
-  --base "$changed_base" --since "$stale_previous"); then
-  unset FAIL_KIMI_RESUME
-  fail 'stale Kimi resume did not fail the current gate'
-fi
-unset FAIL_KIMI_RESUME
-[[ ! -s "$kimi_incremental_state" ]] || fail 'stale Kimi resume state was not cleared'
-[[ "$(cat "$incremental_state")" == "$checkpoint_before_kimi_failure" ]] || fail 'failed Kimi resume advanced the joint review checkpoint'
-(cd "$repo_incremental" && run_review "$repo_incremental" incremental-task "" \
-  --base "$changed_base" --since "$stale_previous")
-[[ "$(tail -n 1 "$tmp/kimi.log")" != *--session* ]] || fail 'stale Kimi session was retried instead of starting fresh'
-grep -Fq 'NEW_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'post-stale Kimi review was not full'
-
 claude_fallback_previous="$(git -C "$repo_incremental" rev-parse HEAD)"
 printf 'CLAUDE_FALLBACK_BODY\n' > "$repo_incremental/claude-fallback.txt"
 git -C "$repo_incremental" add claude-fallback.txt
@@ -484,7 +510,7 @@ FAIL_RESUME_MARKER="$tmp/incremental-failed-resume"; export FAIL_RESUME_MARKER
   --base "$changed_base" --since "$claude_fallback_previous")
 unset FAIL_RESUME_MARKER
 grep -Fq 'NEW_PATCH_BODY' "$(last_bundle claude "$tmp/claude.log")" || fail 'fresh Claude fallback did not receive the full task'
-! grep -Fq 'NEW_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'resumed Kimi repeated an old patch body'
+grep -Fq 'NEW_PATCH_BODY' "$(last_bundle kimi "$tmp/kimi.log")" || fail 'fresh Kimi review did not receive the full task'
 
 escaped_key='../../incremental-outside'
 (cd "$repo_incremental" && run_review "$repo_incremental" "$escaped_key" "" --base "$changed_base")
@@ -512,13 +538,13 @@ printf 'SKIPPED_REVIEW_BODY\n' > "$repo_incremental/skipped.txt"
 git -C "$repo_incremental" add skipped.txt
 git -C "$repo_incremental" commit -qm 'add skipped review fixture'
 SKIP_KIMI=1; EARLY_KIMI_PASS=1; export SKIP_KIMI EARLY_KIMI_PASS
-if (cd "$repo_incremental" && run_review "$repo_incremental" "$skipped_key" "" \
-  --base "$changed_base" --since "$skipped_previous"); then
+(cd "$repo_incremental" && run_review "$repo_incremental" "$skipped_key" "" \
+  --base "$changed_base" --since "$skipped_previous") || {
   unset SKIP_KIMI EARLY_KIMI_PASS
-  fail 'final SKIPPED Kimi verdict did not fail the gate'
-fi
+  fail 'SKIPPED optional Kimi verdict blocked Claude'
+}
 unset SKIP_KIMI EARLY_KIMI_PASS
-[[ "$(cat "$skipped_checkpoint")" == "$checkpoint_before_skipped" ]] || fail 'SKIPPED verdict advanced the joint review checkpoint'
+[[ "$(cat "$skipped_checkpoint")" != "$checkpoint_before_skipped" ]] || fail 'Claude checkpoint did not advance after optional Kimi SKIPPED'
 ! grep -Fq "ambiguous argument 'HEAD'" "$tmp/review.stderr" || fail 'unborn working-tree review emitted a raw HEAD error'
 
-printf 'parallel Claude and Kimi review checks passed\n'
+printf 'mandatory Claude and optional targeted Kimi review checks passed\n'

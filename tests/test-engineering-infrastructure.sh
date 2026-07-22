@@ -462,6 +462,7 @@ cmp "$TMP/destination.md" "$TMP/destination.before"
 
 FINISH="$ROOT/shared/skills/finish-pr"
 CODEX_GATE="$ROOT/codex/skills/claude-gated-development/SKILL.md"
+CODEX_GATE_RUNNER="$ROOT/codex/skills/claude-gated-development/scripts/claude-review.sh"
 test -f "$FINISH/SKILL.md"
 grep -Fq 'name: finish-pr' "$FINISH/SKILL.md"
 grep -Fq 'type(scope): imperative summary' "$FINISH/SKILL.md"
@@ -471,8 +472,8 @@ grep -Fq 'stops after drafting' "$FINISH/SKILL.md"
 grep -Fq 'does not push, merge, synchronize, delete branches, or delete worktrees' "$FINISH/SKILL.md"
 grep -Eq '^\| 9\. Finish \|.*`finish-pr`.*then.*/finishing-a-development-branch.*\|$' \
   "$ROOT/claude/skills/codex-gated-development/SKILL.md"
-grep -Eq '^\| 7\. Finish \|.*`finish-pr`.*then.*`superpowers:finishing-a-development-branch`.*\|$' \
-  "$ROOT/codex/skills/claude-gated-development/SKILL.md"
+grep -Fq 'Finish: use `finish-pr`, then `superpowers:finishing-a-development-branch`' \
+  "$CODEX_GATE"
 grep -Eq '^\| Finish handoff \| After the final code gate clears \| Use `finish-pr`.*before.*branch-finishing workflow\. \|$' \
   "$ROOT/kimi/skills/kimi-gated-development/SKILL.md"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$FINISH/SKILL.md"; then
@@ -515,11 +516,14 @@ cmp "$TMP/claude-managed.md" "$BLOCK"
 grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$AGENTS"
 grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$CLAUDE"
 
-grep -Fq 'first round for each review mode is a full review' "$CODEX_GATE"
-grep -Fq -- '--since "$PREVIOUS_REVIEW_HEAD"' "$CODEX_GATE"
-grep -Fq 'Commit the fixes before an incremental rerun.' "$CODEX_GATE"
-grep -Fq 'Claude may still spawn its own subagents' "$CODEX_GATE"
-grep -Fq 'Kimi may still use its built-in subagents' "$CODEX_GATE"
+grep -Fq 'sole mandatory external gate' "$CODEX_GATE"
+grep -Fq 'Kimi availability, quota, transport failure, or missing verdict never blocks the Claude gate.' \
+  "$CODEX_GATE"
+grep -Fq -- '--kimi-risk concurrency' "$CODEX_GATE"
+grep -Fq -- '--since <previous-reviewed-head>' "$CODEX_GATE"
+grep -Fq 'For incremental reruns, save the reviewed commit, commit the fixes' "$CODEX_GATE"
+grep -Fq 'You may use built-in Agent and AgentSwarm subagents.' "$CODEX_GATE_RUNNER"
+grep -Fq 'Do not invoke external reviewers or review-gate workflows' "$CODEX_GATE_RUNNER"
 
 test "$(grep -Fc '<!-- BEGIN bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
 test "$(grep -Fc '<!-- END bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
@@ -548,6 +552,8 @@ grep -Fq 'Source map' "$OVERVIEW"
 grep -Fq 'Source map' "$ARCHITECTURE_INDEX"
 grep -Fq 'incremental-review-scope.txt' "$OVERVIEW"
 grep -Fq -- '--since <previous-reviewed-head>' "$ROOT/README.md"
+grep -Fq 'sole mandatory external gate' "$ROOT/README.md"
+grep -Fq 'Optional Kimi' "$ROOT/README.md"
 if grep -Ern 'POSIX helper|POSIX shell script|POSIX-compatible shell checks' \
   "$ROOT/docs" "$BOOTSTRAP/SKILL.md" >"$TMP/posix-claims"; then
   cat "$TMP/posix-claims" >&2
