@@ -100,6 +100,9 @@ kimi_risk_list=""
 kimi_focus_arg=""
 kimi_bin=""
 sandbox_bin=""
+sandbox_kind=""
+sandbox_args=()
+sandbox_error=""
 if ((${#kimi_risks[@]})); then
   printf -v kimi_risk_list '%s, ' "${kimi_risks[@]}"
   kimi_risk_list="${kimi_risk_list%, }"
@@ -114,15 +117,30 @@ if ((${#kimi_risks[@]})); then
     printf 'Warning: optional Kimi review unavailable: kimi CLI is not installed\n' >&2
     review_with_kimi=0
   else
-    sandbox_bin="/usr/bin/sandbox-exec"
-    if [[ ! -x "$sandbox_bin" ]]; then
-      sandbox_bin="$(command -v sandbox-exec 2>/dev/null || true)"
+    sandbox_platform="$(uname -s 2>/dev/null || true)"
+    case "$sandbox_platform" in
+      Darwin) sandbox_kind="sandbox-exec" ;;
+      Linux) sandbox_kind="bwrap" ;;
+      *)
+        if [[ -n "$sandbox_platform" ]]; then
+          printf 'Warning: optional Kimi review unavailable: platform %s has no supported native sandbox\n' "$sandbox_platform" >&2
+        else
+          printf 'Warning: optional Kimi review unavailable: could not detect the platform\n' >&2
+        fi
+        review_with_kimi=0
+        ;;
+    esac
+    if [[ "$review_with_kimi" -eq 1 ]]; then
+      sandbox_bin="/usr/bin/$sandbox_kind"
+    fi
+    if [[ "$review_with_kimi" -eq 1 && ! -x "$sandbox_bin" ]]; then
+      sandbox_bin="$(command -v "$sandbox_kind" 2>/dev/null || true)"
       if [[ -n "$sandbox_bin" && "$sandbox_bin" != /* ]]; then
         sandbox_bin="$(cd "$(dirname "$sandbox_bin")" && pwd -P)/$(basename "$sandbox_bin")"
       fi
     fi
-    if [[ ! -x "$sandbox_bin" ]]; then
-      printf 'Warning: optional Kimi review unavailable: native sandbox-exec is missing\n' >&2
+    if [[ "$review_with_kimi" -eq 1 && ! -x "$sandbox_bin" ]]; then
+      printf 'Warning: optional Kimi review unavailable: native %s is missing\n' "$sandbox_kind" >&2
       review_with_kimi=0
     fi
   fi
@@ -253,21 +271,54 @@ sandbox_path() {
 }
 
 prepare_kimi_sandbox() {
-  local sandbox_repo sandbox_common sandbox_git
-  sandbox_repo="$(sandbox_path "$repo_root")" || return
-  sandbox_common="$(sandbox_path "$git_common_dir")" || return
-  sandbox_git="$(sandbox_path "$git_dir")" || return
-  {
-    printf '(version 1)\n' &&
-    printf '(allow default)\n' &&
-    printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_repo" &&
-    printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_common" &&
-    printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_git"
-  } > "$sandbox_profile"
+  local covered mask path sandbox_repo sandbox_common sandbox_git
+  local -a masks=("$repo_root")
+  if [[ "$sandbox_kind" == "sandbox-exec" ]]; then
+    sandbox_repo="$(sandbox_path "$repo_root")" || return
+    sandbox_common="$(sandbox_path "$git_common_dir")" || return
+    sandbox_git="$(sandbox_path "$git_dir")" || return
+    {
+      printf '(version 1)\n' &&
+      printf '(allow default)\n' &&
+      printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_repo" &&
+      printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_common" &&
+      printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_git"
+    } > "$sandbox_profile" || return
+    sandbox_args=(-f "$sandbox_profile")
+    return
+  fi
+
+  for path in "$git_common_dir" "$git_dir"; do
+    covered=0
+    for mask in "${masks[@]}"; do
+      if [[ "$path" == "$mask" || "$path" == "$mask/"* ]]; then
+        covered=1
+        break
+      fi
+    done
+    if [[ "$covered" -eq 0 ]]; then
+      masks+=("$path")
+    fi
+  done
+  # Match Seatbelt's allow-default policy: keep the host root and network
+  # available, then hide only the live repository and Git state below.
+  sandbox_args=(--die-with-parent --new-session --unshare-pid --bind / / --dev /dev --proc /proc)
+  for mask in "${masks[@]}"; do
+    sandbox_args+=(--tmpfs "$mask" --remount-ro "$mask")
+  done
+  sandbox_args+=(--)
+  # A private /proc prevents /proc/<host-pid>/root from bypassing the empty
+  # mounts that hide the live repository and external Git directories.
+  sandbox_error="$("$sandbox_bin" "${sandbox_args[@]}" /bin/true 2>&1 >/dev/null)"
 }
 
 if [[ "$review_with_kimi" -eq 1 ]] && ! prepare_kimi_sandbox; then
-  printf 'Warning: optional Kimi sandbox setup failed; continuing with Claude only\n' >&2
+  printf 'Warning: optional Kimi sandbox setup failed; continuing with Claude only' >&2
+  if [[ -n "$sandbox_error" ]]; then
+    printf ': %s\n' "$sandbox_error" >&2
+  else
+    printf '\n' >&2
+  fi
   review_with_kimi=0
 fi
 
@@ -463,7 +514,7 @@ run_kimi_review() {
     cd "$kimi_workspace"
     # stdin is pinned to /dev/null: kimi -p, like other CLIs, can block on an
     # open stdin pipe (e.g. under background runners).
-    "${kimi_env[@]}" "$sandbox_bin" -f "$sandbox_profile" "$kimi_bin" "${kimi_args[@]}" < /dev/null
+    "${kimi_env[@]}" "$sandbox_bin" "${sandbox_args[@]}" "$kimi_bin" "${kimi_args[@]}" < /dev/null
   ) > "$kimi_raw_report" 2>&1; then
     kimi_status=0
   else
@@ -522,9 +573,11 @@ fi
 wait "$claude_pid"
 claude_status=$?
 kimi_status=0
+kimi_process_status=0
 if [[ "$review_with_kimi" -eq 1 ]]; then
   wait "$kimi_pid"
   kimi_status=$?
+  kimi_process_status=$kimi_status
 fi
 set -e
 
@@ -581,7 +634,12 @@ if [[ "$claude_status" -ne 0 ]]; then
   exit "$claude_status"
 fi
 if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -ne 0 ]]; then
-  printf 'Warning: optional Kimi review did not complete; Claude remains the gate\n' >&2
+  if [[ "$kimi_process_status" -ne 0 ]]; then
+    printf 'Warning: optional Kimi review did not complete through %s (exit %s); Claude remains the gate\n' \
+      "$sandbox_kind" "$kimi_process_status" >&2
+  else
+    printf 'Warning: optional Kimi review output did not satisfy the verdict contract; Claude remains the gate\n' >&2
+  fi
 fi
 
 if [[ -n "$reviewed_state_file" && -n "$base_oid" && -z "$status" ]]; then

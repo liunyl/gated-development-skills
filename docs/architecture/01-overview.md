@@ -15,7 +15,7 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
 | Component | Responsibility | Repository source |
 |---|---|---|
 | Claude Code gate | Requires independent Codex review for non-trivial engineering work and quant backtests. | `claude/skills/codex-gated-development/SKILL.md` |
-| Codex gate | Routes complex or high-risk work through a mandatory Claude review, with optional targeted Kimi review for named state-consistency risks. | `codex/skills/claude-gated-development/SKILL.md`; `codex/skills/claude-gated-development/scripts/claude-review.sh` |
+| Codex gate | Routes complex or high-risk work through a mandatory Claude review, with optional targeted Kimi review for named state-consistency risks. Kimi receives a detached snapshot through macOS `sandbox-exec` or Linux Bubblewrap. | `codex/skills/claude-gated-development/SKILL.md`; `codex/skills/claude-gated-development/scripts/claude-review.sh` |
 | Kimi Code gate | Uses a judgment-based threshold and persistent Claude and Codex reviewer sessions. | `kimi/skills/kimi-gated-development/SKILL.md`; `kimi/skills/kimi-gated-development/scripts/` |
 | `bootstrap-project` | Builds an evidence-backed module map and settles the architecture taxonomy before prose, while allowing a repository with at most one durable module to keep readable detail in one overview and preserving an existing equivalent current-architecture hierarchy. | `shared/skills/bootstrap-project/SKILL.md`; `shared/skills/bootstrap-project/assets/`; `shared/skills/bootstrap-project/scripts/update-managed-block.sh` |
 | `finish-pr` | Audits the complete proposed diff, drafts commit and PR content, and hands branch lifecycle work to an established finishing workflow. | `shared/skills/finish-pr/SKILL.md` |
@@ -87,6 +87,11 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
   external model, or another review gate. Native Claude subagents and Kimi
   `Agent`/`AgentSwarm` subagents remain available.
   (`codex/skills/claude-gated-development/scripts/claude-review.sh`)
+- Optional Kimi execution fails closed when the platform sandbox is unavailable.
+  macOS denies live repository and Git paths with `sandbox-exec`; Linux masks
+  them with read-only temporary filesystems inside Bubblewrap and uses a private
+  PID namespace and `/proc` mount to prevent host-root path bypasses.
+  (`codex/skills/claude-gated-development/scripts/claude-review.sh`; `README.md`)
 - The dependency-free engineering infrastructure test exercises shared assets,
   managed-block behavior, dogfood files, and installation documentation.
   (`tests/test-engineering-infrastructure.sh`)

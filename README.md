@@ -44,6 +44,22 @@ for runtime in .claude .codex .kimi-code; do
 done
 ```
 
+Optional Kimi reviews use the native sandbox: `sandbox-exec` on macOS or
+Bubblewrap on Linux. Ubuntu installs Bubblewrap with:
+
+```bash
+sudo apt-get install bubblewrap
+```
+
+Ubuntu 24.04 and later may also require the packaged AppArmor profile:
+
+```bash
+sudo apt-get install apparmor-profiles
+sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+  /etc/apparmor.d/bwrap-userns-restrict
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
 That's it — each tool auto-discovers skills under its `skills/` dir.
 
 `kimi-gated-development` needs both the `claude` and `codex` CLIs installed

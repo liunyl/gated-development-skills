@@ -98,6 +98,7 @@ if [[ -n "${PROBE_SANDBOX:-}" ]]; then
   sandbox_failed=0
   /bin/cat "$LIVE_IGNORED" >/dev/null 2>&1 && sandbox_failed=1
   /bin/cat "$LIVE_GIT_FILE" >/dev/null 2>&1 && sandbox_failed=1
+  /bin/cat "/proc/1/root$LIVE_IGNORED" >/dev/null 2>&1 && sandbox_failed=1
   /usr/bin/touch "$LIVE_WRITE" >/dev/null 2>&1 && sandbox_failed=1
   /usr/bin/touch "$LIVE_GIT_WRITE" >/dev/null 2>&1 && sandbox_failed=1
   [[ -z "${OLDPWD:-}${GIT_DIR:-}${GIT_WORK_TREE:-}" ]] || sandbox_failed=1
@@ -152,7 +153,11 @@ chmod +x "$tmp/relative-bin/kimi"
 
 make_repo() {
   local path="$1"
-  git init -q "$path"
+  if (($# > 1)); then
+    git init -q --separate-git-dir "$2" "$path"
+  else
+    git init -q "$path"
+  fi
   git -C "$path" config user.name Test
   git -C "$path" config user.email test@example.com
   printf '.ignored-secret\n.sandbox-write\n' > "$path/.gitignore"
@@ -167,7 +172,7 @@ run_review() {
   local repo="$1" task_key="$2" probe="${3:-}"
   local live_repo live_git review_path
   local mode="${REVIEW_MODE:-adversarial}"
-  local -a review_env runner_args
+  local -a review_env runner_args sandbox_prefix=()
   live_repo="$(git -C "$repo" rev-parse --show-toplevel)"
   live_git="$(git -C "$repo" rev-parse --path-format=absolute --git-dir)"
   review_path="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -197,6 +202,11 @@ run_review() {
       GIT_DIR="$live_git"
       GIT_WORK_TREE="$live_repo"
     )
+  elif [[ "$probe" == "failing-bwrap" ]]; then
+    sandbox_prefix=(
+      /usr/bin/bwrap --die-with-parent --new-session --bind / / --dev /dev
+      --ro-bind /usr/bin/env /usr/bin/bwrap --
+    )
   fi
   rm -f "$tmp/claude.started" "$tmp/kimi.started"
   runner_args=("$mode" --focus test)
@@ -215,11 +225,11 @@ run_review() {
     runner_args+=("${@:4}")
   fi
   if [[ -n "$task_key" ]]; then
-    env -u CLAUDE_REVIEW_SESSION_KEY CODEX_THREAD_ID="$task_key" \
+    "${sandbox_prefix[@]}" env -u CLAUDE_REVIEW_SESSION_KEY CODEX_THREAD_ID="$task_key" \
       "${review_env[@]}" \
       "$runner" "${runner_args[@]}" >/dev/null 2>>"$tmp/review.stderr"
   else
-    env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
+    "${sandbox_prefix[@]}" env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
       "${review_env[@]}" \
       "$runner" "${runner_args[@]}" >/dev/null 2>>"$tmp/review.stderr"
   fi
@@ -248,10 +258,13 @@ session_hash_for() {
 repo_a="$tmp/repo-a"
 repo_b="$tmp/repo-b"
 repo_c="$tmp/repo-c"
+repo_external_git="$tmp/repo-external-git"
+external_git="$tmp/external.git"
 repo_unborn="$tmp/repo-unborn"
 make_repo "$repo_a"
 make_repo "$repo_b"
 make_repo "$repo_c"
+make_repo "$repo_external_git" "$external_git"
 git init -q "$repo_unborn"
 printf 'uncommitted plan\n' > "$repo_unborn/plan.md"
 external_secret="$tmp/external-secret.txt"
@@ -297,6 +310,16 @@ unset FAIL_KIMI_SETUP
 grep -Fq 'optional Kimi snapshot setup failed' "$tmp/review.stderr" || fail 'Kimi setup failure warning was omitted'
 : > "$tmp/claude.log"
 : > "$tmp/kimi.log"
+
+if [[ "$(uname -s)" == "Linux" ]]; then
+  (cd "$repo_a" && EXPECT_KIMI_START=0 run_review "$repo_a" bwrap-probe-failure failing-bwrap)
+  [[ "$(wc -l < "$tmp/claude.log")" -eq 1 ]] || fail 'Claude did not run after Bubblewrap probe failure'
+  [[ ! -s "$tmp/kimi.log" ]] || fail 'Kimi started after Bubblewrap probe failure'
+  grep -Fq 'optional Kimi sandbox setup failed' "$tmp/review.stderr" || fail 'Bubblewrap probe failure warning was omitted'
+  grep -Fq 'unrecognized option' "$tmp/review.stderr" || fail 'Bubblewrap probe failure detail was omitted'
+  : > "$tmp/claude.log"
+  : > "$tmp/kimi.log"
+fi
 
 (cd "$repo_a" && run_review "$repo_a" task-a)
 (cd "$repo_a" && run_review "$repo_a" task-a)
@@ -350,9 +373,16 @@ last_line="$(tail -n 1 "$tmp/claude.log")"
 [[ "$last_line" != *--session-id* && "$last_line" != *--resume* ]] || fail 'no-task review unexpectedly reused a session'
 [[ "$(sed -n '8p' "$tmp/kimi.log")" != *--session* ]] || fail 'no-task Kimi review unexpectedly reused a session'
 
+sandbox_calls_before="$(wc -l < "$tmp/kimi.log")"
 (cd "$repo_a" && run_review "$repo_a" sandbox-probe sandbox)
+[[ "$(wc -l < "$tmp/kimi.log")" -eq "$((sandbox_calls_before + 1))" ]] || fail 'Kimi live-repository sandbox probe did not complete'
 [[ ! -e "$repo_a/.sandbox-write" ]] || fail 'Kimi wrote an ignored live-worktree file'
 [[ ! -e "$repo_a/.git/sandbox-write" ]] || fail 'Kimi wrote live Git state'
+sandbox_calls_before="$(wc -l < "$tmp/kimi.log")"
+(cd "$repo_external_git" && run_review "$repo_external_git" external-git-sandbox-probe sandbox)
+[[ "$(wc -l < "$tmp/kimi.log")" -eq "$((sandbox_calls_before + 1))" ]] || fail 'Kimi separate-Git-dir sandbox probe did not complete'
+[[ ! -e "$repo_external_git/.sandbox-write" ]] || fail 'Kimi wrote a separate-Git-dir worktree file'
+[[ ! -e "$external_git/sandbox-write" ]] || fail 'Kimi wrote separate Git state'
 
 rm -f "$tmp/relative-kimi.started"
 (cd "$repo_a" && run_review "$repo_a" relative-path relative-path)
