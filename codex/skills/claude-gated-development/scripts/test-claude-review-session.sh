@@ -47,6 +47,11 @@ printf 'CALL' >> "$CLAUDE_LOG"
 shift
 printf '\t%q' "$@" >> "$CLAUDE_LOG"
 printf '\n' >> "$CLAUDE_LOG"
+if [[ -n "${HANG_CLAUDE:-}" ]]; then
+  printf '%s' "$$" > "$CLAUDE_HANG_MARKER"
+  sleep 600
+  exit 0
+fi
 if [[ -n "${FAIL_RESUME_MARKER:-}" && ! -e "$FAIL_RESUME_MARKER" ]]; then
   for arg in "$@"; do
     if [[ "$arg" == "--resume" ]]; then
@@ -127,6 +132,11 @@ cp "$PWD/review-scope.txt" "$BUNDLE_CAPTURE/kimi-$call_no.txt"
 printf 'CALL\tcwd=%q' "$PWD" >> "$KIMI_LOG"
 printf '\t%q' "$@" >> "$KIMI_LOG"
 printf '\n' >> "$KIMI_LOG"
+if [[ -n "${HANG_KIMI:-}" ]]; then
+  : > "$KIMI_HANG_MARKER"
+  sleep 600
+  exit 0
+fi
 if [[ -n "${FAIL_KIMI_RESUME:-}" && "$*" == *--session* ]]; then
   exit 9
 fi
@@ -184,6 +194,7 @@ run_review() {
     RELATIVE_KIMI_MARKER="$tmp/relative-kimi.started"
     LIVE_REPO="$live_repo"
     CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started"
+    KIMI_HANG_MARKER="$tmp/kimi.hang"
   )
   if [[ "${INCLUDE_KIMI:-1}" -eq 1 && "${EXPECT_KIMI_START:-1}" -eq 1 ]]; then
     review_env+=(EXPECT_KIMI=1)
@@ -224,12 +235,14 @@ run_review() {
   if (($# > 3)); then
     runner_args+=("${@:4}")
   fi
+  # ${arr[@]+...} keeps the empty-array expansion legal under macOS bash 3.2
+  # with set -u, where a bare "${arr[@]}" aborts as unbound.
   if [[ -n "$task_key" ]]; then
-    "${sandbox_prefix[@]}" env -u CLAUDE_REVIEW_SESSION_KEY CODEX_THREAD_ID="$task_key" \
+    ${sandbox_prefix[@]+"${sandbox_prefix[@]}"} env -u CLAUDE_REVIEW_SESSION_KEY CODEX_THREAD_ID="$task_key" \
       "${review_env[@]}" \
       "$runner" "${runner_args[@]}" >/dev/null 2>>"$tmp/review.stderr"
   else
-    "${sandbox_prefix[@]}" env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
+    ${sandbox_prefix[@]+"${sandbox_prefix[@]}"} env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
       "${review_env[@]}" \
       "$runner" "${runner_args[@]}" >/dev/null 2>>"$tmp/review.stderr"
   fi
@@ -394,6 +407,53 @@ FAIL_KIMI=1; export FAIL_KIMI
   fail 'optional Kimi failure blocked Claude'
 }
 unset FAIL_KIMI
+
+# A hung optional Kimi is terminated after the bounded grace and never
+# blocks the mandatory Claude verdict.
+rm -f "$tmp/kimi.hang"
+hang_start="$(date +%s)"
+(cd "$repo_a" && HANG_KIMI=1 KIMI_REVIEW_GRACE_SECONDS=1 run_review "$repo_a" task-a) \
+  || fail 'hung optional Kimi failed the Claude gate'
+hang_elapsed="$(( $(date +%s) - hang_start ))"
+[[ -e "$tmp/kimi.hang" ]] || fail 'hang scenario never reached the fake Kimi'
+[[ "$hang_elapsed" -lt 60 ]] || fail 'hung Kimi was not terminated within the grace window'
+grep -Fq 'optional Kimi review timed out' "$tmp/review.stderr" || fail 'Kimi timeout warning was omitted'
+(cd "$repo_a" && run_review "$repo_a" task-a) || fail 'round after Kimi timeout failed'
+
+# An interrupted wrapper terminates the reviewer process group instead of
+# leaving an orphan running against the persistent session.
+rm -f "$tmp/claude.hang"
+(
+  cd "$repo_a" && exec env -u CODEX_THREAD_ID -u CLAUDE_REVIEW_SESSION_KEY \
+    HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    CLAUDE_LOG="$tmp/claude.log" KIMI_LOG="$tmp/kimi.log" \
+    BUNDLE_CAPTURE="$tmp/bundles" \
+    RELATIVE_KIMI_MARKER="$tmp/relative-kimi.started" \
+    LIVE_REPO="$(git -C "$repo_a" rev-parse --show-toplevel)" \
+    CLAUDE_STARTED="$tmp/claude.started" KIMI_STARTED="$tmp/kimi.started" \
+    KIMI_HANG_MARKER="$tmp/kimi.hang" \
+    HANG_CLAUDE=1 CLAUDE_HANG_MARKER="$tmp/claude.hang" \
+    "$runner" adversarial --focus test --session-key interrupt-task
+) >/dev/null 2>>"$tmp/review.stderr" &
+runner_pid=$!
+for _ in {1..100}; do
+  [[ -s "$tmp/claude.hang" ]] && break
+  sleep 0.1
+done
+[[ -s "$tmp/claude.hang" ]] || fail 'interruption scenario never reached the reviewer'
+kill -TERM "$runner_pid"
+if wait "$runner_pid"; then
+  fail 'interrupted runner exited zero'
+fi
+hung_pid="$(cat "$tmp/claude.hang")"
+for _ in {1..50}; do
+  kill -0 "$hung_pid" 2>/dev/null || break
+  sleep 0.1
+done
+if kill -0 "$hung_pid" 2>/dev/null; then
+  fail 'interrupted runner left the reviewer process running'
+fi
+(cd "$repo_a" && run_review "$repo_a" interrupt-task) || fail 'round after interruption failed'
 
 readonly_state_dir="$(git -C "$repo_c" rev-parse --path-format=absolute --git-common-dir)/claude-review-sessions"
 mkdir -p "$readonly_state_dir"

@@ -499,6 +499,8 @@ cmp "$TMP/destination.md" "$TMP/destination.before"
 FINISH="$ROOT/shared/skills/finish-pr"
 CODEX_GATE="$ROOT/codex/skills/claude-gated-development/SKILL.md"
 CODEX_GATE_RUNNER="$ROOT/codex/skills/claude-gated-development/scripts/claude-review.sh"
+CLAUDE_GATE="$ROOT/claude/skills/codex-gated-development/SKILL.md"
+CLAUDE_GATE_RUNNER="$ROOT/claude/skills/codex-gated-development/scripts/codex-review.sh"
 test -f "$FINISH/SKILL.md"
 grep -Fq 'name: finish-pr' "$FINISH/SKILL.md"
 grep -Fq 'type(scope): imperative summary' "$FINISH/SKILL.md"
@@ -506,8 +508,8 @@ grep -Fq 'blocks the PR' "$FINISH/SKILL.md"
 grep -Fq 'finishing-a-development-branch' "$FINISH/SKILL.md"
 grep -Fq 'stops after drafting' "$FINISH/SKILL.md"
 grep -Fq 'does not push, merge, synchronize, delete branches, or delete worktrees' "$FINISH/SKILL.md"
-grep -Eq '^\| 9\. Finish \|.*`finish-pr`.*then.*/finishing-a-development-branch.*\|$' \
-  "$ROOT/claude/skills/codex-gated-development/SKILL.md"
+grep -Fq 'Finish: use `finish-pr`, then `/finishing-a-development-branch`' \
+  "$CLAUDE_GATE"
 grep -Fq 'Finish: use `finish-pr`, then `superpowers:finishing-a-development-branch`' \
   "$CODEX_GATE"
 grep -Eq '^\| Finish handoff \| After the final code gate clears \| Use `finish-pr`.*before.*branch-finishing workflow\. \|$' \
@@ -565,13 +567,30 @@ grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$AGENTS"
 grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$CLAUDE"
 
 grep -Fq 'sole mandatory external gate' "$CODEX_GATE"
-grep -Fq 'Kimi availability, quota, transport failure, or missing verdict never blocks the Claude gate.' \
+grep -Fq 'Kimi availability, quota, transport failure, a hang, or a missing verdict never blocks the Claude gate' \
   "$CODEX_GATE"
+grep -Fq 'KIMI_REVIEW_GRACE_SECONDS' "$CODEX_GATE_RUNNER"
 grep -Fq -- '--kimi-risk concurrency' "$CODEX_GATE"
 grep -Fq -- '--since <previous-reviewed-head>' "$CODEX_GATE"
 grep -Fq 'For incremental reruns, save the reviewed commit, commit the fixes' "$CODEX_GATE"
 grep -Fq 'You may use built-in Agent and AgentSwarm subagents.' "$CODEX_GATE_RUNNER"
 grep -Fq 'Do not invoke external reviewers or review-gate workflows' "$CODEX_GATE_RUNNER"
+
+grep -Fq 'sole mandatory external gate' "$CLAUDE_GATE"
+grep -Fq 'Kimi availability, quota, transport failure, a hang, or a missing verdict never blocks the Codex' \
+  "$CLAUDE_GATE"
+grep -Fq -- '--kimi-risk concurrency' "$CLAUDE_GATE"
+grep -Fq -- '--since <previous-reviewed-head>' "$CLAUDE_GATE"
+grep -Fq 'For incremental reruns, save the reviewed commit, commit the fixes' "$CLAUDE_GATE"
+grep -Fq 'Risk triggers override artifact type' "$CLAUDE_GATE"
+grep -Fq 'Route by concrete risk, not diff size' "$CLAUDE_GATE"
+test -x "$CLAUDE_GATE_RUNNER"
+test -x "$ROOT/claude/skills/codex-gated-development/scripts/test-codex-review-session.sh"
+grep -Fq 'Your tools are restricted to Read, Grep, and Glob.' "$CLAUDE_GATE_RUNNER"
+grep -Fq 'Do not invoke external reviewers or review-gate workflows' "$CLAUDE_GATE_RUNNER"
+grep -Fq 'KIMI_CODE_EXPERIMENTAL_FLAG=1' "$CLAUDE_GATE_RUNNER"
+grep -Fq -- '--ignore-user-config' "$CLAUDE_GATE_RUNNER"
+grep -Fq 'End with exactly one machine-readable line: VERDICT: PASS' "$CLAUDE_GATE_RUNNER"
 
 test "$(grep -Fc '<!-- BEGIN bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
 test "$(grep -Fc '<!-- END bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1

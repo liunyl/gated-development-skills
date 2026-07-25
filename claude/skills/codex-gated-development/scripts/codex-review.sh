@@ -7,24 +7,29 @@ umask 077
 usage() {
   cat <<'EOF'
 Usage:
-  claude-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
-  claude-review.sh code [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
+  codex-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
+  codex-review.sh code [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
 
 Without --base, review staged, unstaged, and untracked working-tree changes.
 With --base, review REF...HEAD plus current working-tree changes.
 With --base and --since, review only committed changes since REF when the same
-review mode has a verified persistent checkpoint; otherwise review the full
-task. Incremental review requires a clean working tree.
+review mode has a verified persistent checkpoint produced by the same Codex
+session; otherwise review the full task. Incremental review requires a clean
+working tree.
 
-Claude is the mandatory reviewer. Repeat --kimi-risk to add a concurrent Kimi
+Codex is the mandatory reviewer. Repeat --kimi-risk to add a concurrent Kimi
 second opinion for: concurrency, idempotency, database-transactions,
-tenant-isolation, or distributed-state. Kimi availability or transport failure
-does not fail the Claude gate; any valid finding it returns must still be triaged.
+tenant-isolation, or distributed-state. Kimi availability, transport failure,
+or a hang never fails the Codex gate; any valid finding it returns must still
+be triaged. A Kimi round still running after the Codex verdict is granted
+KIMI_REVIEW_GRACE_SECONDS (default 300) before its process group is terminated
+with a warning.
 
-Session continuity: with --session-key (or CLAUDE_REVIEW_SESSION_KEY, or
-CODEX_THREAD_ID), one persistent Claude session is reused across review rounds.
-Optional Kimi reviews always use a fresh full snapshot. Without any key the
-Claude review also runs non-persistently.
+Session continuity: with --session-key (or CODEX_REVIEW_SESSION_KEY, or
+CLAUDE_CODE_SESSION_ID), one persistent Codex session per (repository, key) is
+reused across review rounds; distinct tasks must use distinct keys. Optional
+Kimi reviews always use a fresh full snapshot. Without any key the review runs
+--ephemeral and nothing is persisted.
 EOF
 }
 
@@ -94,7 +99,7 @@ while (($#)); do
 done
 
 command -v git >/dev/null 2>&1 || die_usage "git is not installed"
-claude_bin="$(command -v claude 2>/dev/null)" || die_usage "claude CLI is not installed"
+codex_bin="$(command -v codex 2>/dev/null)" || die_usage "codex CLI is not installed"
 review_with_kimi=0
 kimi_risk_list=""
 kimi_focus_arg=""
@@ -145,8 +150,8 @@ if ((${#kimi_risks[@]})); then
     fi
   fi
 fi
-if [[ "$claude_bin" == /* ]]; then
-  export PATH="$(dirname "$claude_bin"):$PATH"
+if [[ "$codex_bin" == /* ]]; then
+  export PATH="$(dirname "$codex_bin"):$PATH"
 fi
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die_usage "run inside a git repository"
@@ -203,16 +208,17 @@ if [[ -z "$focus" ]]; then
   fi
 fi
 
-review_tmp="$(mktemp -d "${TMPDIR:-/tmp}/claude-review.XXXXXX")" || die_usage "cannot create temporary review directory"
-claude_pid=""
+review_tmp="$(mktemp -d "${TMPDIR:-/tmp}/codex-review.XXXXXX")" || die_usage "cannot create temporary review directory"
+lock_dir=""
+codex_pid=""
 kimi_pid=""
-# Reviewer process groups die before their tmpdir is removed: an interrupted
-# wrapper must not leave an orphaned reviewer running against the persistent
-# session while a later round starts, so both reviewers launch under job
-# control below.
+# Reviewer process groups die before the lock is released or their tmpdir is
+# removed: an interrupted wrapper must not leave an orphaned reviewer sharing
+# the persistent session with the next round (the interleaving the lock
+# exists to prevent), so both reviewers launch under job control below.
 cleanup() {
   local pid alive=0
-  for pid in "$claude_pid" "$kimi_pid"; do
+  for pid in "$codex_pid" "$kimi_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       alive=1
       kill -TERM -- "-$pid" 2>/dev/null || true
@@ -220,12 +226,13 @@ cleanup() {
   done
   if [[ "$alive" -eq 1 ]]; then
     sleep 2
-    for pid in "$claude_pid" "$kimi_pid"; do
+    for pid in "$codex_pid" "$kimi_pid"; do
       [[ -z "$pid" ]] || kill -KILL -- "-$pid" 2>/dev/null || true
     done
     wait 2>/dev/null || true
   fi
   rm -rf "$review_tmp"
+  [[ -z "$lock_dir" ]] || rmdir "$lock_dir" 2>/dev/null || true
 }
 trap cleanup EXIT
 # Signal deaths must route through the EXIT trap; bash skips it otherwise.
@@ -235,42 +242,61 @@ trap 'exit 143' TERM
 full_review_bundle="$review_tmp/full-review-scope.txt"
 incremental_review_bundle="$review_tmp/incremental-review-scope.txt"
 review_bundle="$full_review_bundle"
+# The reviewer never executes from inside the reviewed repository: a neutral
+# working root prevents the repository's own project-layer Codex configuration
+# (.codex/config.toml) from configuring its reviewer, whatever its trust state.
+neutral_root="$review_tmp/neutral"
+mkdir -p "$neutral_root"
 sandbox_profile="$review_tmp/kimi.sb"
 kimi_skills_dir="$review_tmp/kimi-skills"
+kimi_agent_file="$review_tmp/kimi-reviewer-agent.md"
 if [[ "$review_with_kimi" -eq 1 ]] && ! mkdir -p "$kimi_skills_dir"; then
-  printf 'Warning: optional Kimi skills setup failed; continuing with Claude only\n' >&2
+  printf 'Warning: optional Kimi skills setup failed; continuing with Codex only\n' >&2
   review_with_kimi=0
 fi
 
-session_key="${session_key_arg:-${CLAUDE_REVIEW_SESSION_KEY:-${CODEX_THREAD_ID:-}}}"
+session_key="${session_key_arg:-${CODEX_REVIEW_SESSION_KEY:-${CLAUDE_CODE_SESSION_ID:-}}}"
 session_file=""
 session_id=""
 reviewed_state_file=""
 reviewed_base=""
 reviewed_head=""
+reviewed_session=""
 kimi_workspace="$review_tmp/kimi-workspace"
 if [[ -n "$session_key" ]]; then
-  session_dir="$git_common_dir/claude-review-sessions"
+  session_dir="$git_common_dir/codex-review-sessions"
   mkdir -p "$session_dir"
   session_hash="$(printf '%s\0%s' "$repo_root" "$session_key" | git hash-object --stdin)"
   session_file="$session_dir/$session_hash"
+  # Rounds sharing a key are serial by contract; the lock turns an accidental
+  # overlap into a loud failure instead of interleaved reviewer turns or torn
+  # session/checkpoint state. A stale lock is never removed silently.
+  if ! mkdir "$session_file.lock" 2>/dev/null; then
+    printf 'Error: another review round holds %s; if no round is running, remove it manually\n' "$session_file.lock" >&2
+    exit 7
+  fi
+  lock_dir="$session_file.lock"
   reviewed_state_file="$session_file.$mode.reviewed"
   if [[ -s "$session_file" ]]; then
     IFS= read -r session_id < "$session_file" || true
   fi
   if [[ -s "$reviewed_state_file" ]]; then
-    read -r reviewed_base reviewed_head < "$reviewed_state_file" || true
-    if ! git -C "$repo_root" rev-parse --verify "${reviewed_head}^{commit}" >/dev/null 2>&1; then
+    read -r reviewed_base reviewed_head reviewed_session < "$reviewed_state_file" || true
+    if [[ -z "$reviewed_session" ]] ||
+       ! git -C "$repo_root" rev-parse --verify "${reviewed_head}^{commit}" >/dev/null 2>&1; then
       reviewed_base=""
       reviewed_head=""
+      reviewed_session=""
     fi
   fi
-
 fi
 
 incremental_active=0
 if [[ -n "$since" ]]; then
-  if [[ -n "$session_id" && "$reviewed_base" == "$base_oid" ]] &&
+  # The checkpoint is honored only when the session that will be resumed is
+  # the session that produced it: that session reviewed base..reviewed_head
+  # in-context, so the reviewed union stays complete even if a key is reused.
+  if [[ -n "$session_id" && "$reviewed_base" == "$base_oid" && "$reviewed_session" == "$session_id" ]] &&
      git -C "$repo_root" merge-base --is-ancestor "$since_oid" "$reviewed_head" &&
      git -C "$repo_root" merge-base --is-ancestor "$reviewed_head" "$head_oid"; then
     incremental_active=1
@@ -340,7 +366,7 @@ prepare_kimi_sandbox() {
 }
 
 if [[ "$review_with_kimi" -eq 1 ]] && ! prepare_kimi_sandbox; then
-  printf 'Warning: optional Kimi sandbox setup failed; continuing with Claude only' >&2
+  printf 'Warning: optional Kimi sandbox setup failed; continuing with Codex only' >&2
   if [[ -n "$sandbox_error" ]]; then
     printf ': %s\n' "$sandbox_error" >&2
   else
@@ -411,10 +437,10 @@ repo_fingerprint() {
   } | git hash-object --stdin
 }
 
-build_claude_prompt() {
+build_codex_prompt() {
   local bundle="$1" scope_contract="$2"
   cat <<EOF
-You are the independent external reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. You may use Claude subagents and non-gate skills when useful, but do not invoke codex-gated-development.
+You are the independent external reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. Your shell runs in a read-only sandbox from a neutral working directory outside the repository; use it only for read commands such as git -C $repo_root status, git -C $repo_root diff, grep, and cat. Do not invoke any gated-development skill (such as codex-gated-development or claude-gated-development), the review wrapper scripts, or another external agent CLI such as claude or kimi; you are the reviewer, not a delegator.
 
 Repository: $repo_root
 Review mode: $mode
@@ -423,7 +449,7 @@ Precomputed review bundle: $bundle
 Review focus: $focus
 Review lens: $lens
 
-Read the precomputed review bundle first, then inspect applicable CLAUDE.md and AGENTS.md guidance and the named repository files with Read, Glob, and Grep. You do not have Bash or file-edit tools. Verify that the review scope is non-empty and contains the artifact's actual substance; do not rely on a prompt summary when the code or document is available.
+Read the precomputed review bundle first, then inspect applicable CLAUDE.md and AGENTS.md guidance and the named repository files under $repo_root. Verify that the review scope is non-empty and contains the artifact's actual substance; do not rely on a prompt summary when the code or document is available.
 
 Return:
 1. Scope examined: exact refs, diffs, and files reviewed.
@@ -439,35 +465,90 @@ This conversation may include earlier review gates from the same task. Use that 
 EOF
 }
 
-full_prompt="$(build_claude_prompt "$full_review_bundle" "$full_scope")"
+full_prompt="$(build_codex_prompt "$full_review_bundle" "$full_scope")"
 prompt="$full_prompt"
 if [[ "$incremental_active" -eq 1 ]]; then
-  prompt="$(build_claude_prompt "$review_bundle" "$scope")"
+  prompt="$(build_codex_prompt "$review_bundle" "$scope")"
 fi
 
 cd "$repo_root"
 before_fingerprint="$(repo_fingerprint)"
 
-claude_args=(
-  --print
-  --permission-mode dontAsk
-  --effort max
-  --output-format text
-  --add-dir "$review_tmp"
-  --tools 'Read,Glob,Grep,Skill,Agent'
-  --allowedTools 'Read,Glob,Grep,Skill,Agent'
-  --strict-mcp-config
-  --mcp-config '{"mcpServers":{}}'
-  --settings '{"disableAllHooks":true,"disableSkillShellExecution":true}'
-  --disallowedTools 'Skill(codex-gated-development)' 'Bash' 'Write' 'Edit' 'NotebookEdit' 'EnterPlanMode' 'ExitPlanMode'
+events_file="$review_tmp/codex-events.jsonl"
+codex_last_message="$review_tmp/codex-last-message.txt"
+
+# The reviewer runs with the user, rules, hooks, plugins, apps, and MCP
+# surfaces removed: reviewed content must never gain tools inside its own
+# reviewer, and a hook or MCP process could mutate state the repository
+# fingerprint cannot see. mcp_servers={} alone is insufficient (TOML table
+# overrides merge per key) and is kept only as redundancy.
+codex_common_args=(
+  --ignore-user-config
+  --ignore-rules
+  --disable hooks
+  --disable plugins
+  --disable apps
+  -c 'mcp_servers={}'
+  --skip-git-repo-check
+  --json
+  --sandbox read-only
+  --output-last-message "$codex_last_message"
 )
 
-# stdin is pinned to /dev/null: claude --print appends piped stdin to the prompt
-# and blocks forever when stdin is an open pipe (e.g. under background runners).
-run_claude() {
-  local review_prompt="$1"
+# stdin is pinned to /dev/null: codex exec appends piped stdin to the prompt
+# and blocks forever when stdin is an open pipe (e.g. under background
+# runners). The last-message file is truncated per attempt so a stale report
+# from a failed attempt can never be printed as this round's verdict.
+run_codex_new() {
+  : > "$codex_last_message"
+  (cd "$neutral_root" && "$codex_bin" exec "${codex_common_args[@]}" "$@") < /dev/null
+}
+
+# Parent options must precede the resume subcommand: codex exec resume
+# rejects parent-only flags such as --sandbox placed after it.
+run_codex_resume() {
+  local resume_id="$1"
   shift
-  "$claude_bin" "$review_prompt" "${claude_args[@]}" "$@" < /dev/null
+  : > "$codex_last_message"
+  (cd "$neutral_root" && "$codex_bin" exec "${codex_common_args[@]}" resume "$resume_id" "$@") < /dev/null
+}
+
+extract_thread_id() {
+  grep '"thread.started"' "$1" | head -n 1 | sed -n 's/.*"thread_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true
+}
+
+run_codex_review() {
+  local codex_status
+  if [[ -z "$session_file" ]]; then
+    run_codex_new --ephemeral "$prompt" > "$events_file"
+    return $?
+  fi
+
+  if [[ -n "$session_id" ]]; then
+    run_codex_resume "$session_id" "$prompt" > "$events_file"
+    codex_status=$?
+  else
+    codex_status=1
+  fi
+
+  if [[ "$codex_status" -ne 0 ]]; then
+    [[ -z "$session_id" ]] || printf 'Warning: Codex session %s could not be resumed; starting a new session\n' "$session_id" >&2
+    # A fresh conversation cannot safely interpret an incremental patch alone.
+    run_codex_new "$full_prompt" > "$events_file"
+    codex_status=$?
+    if [[ "$codex_status" -eq 0 ]]; then
+      session_id="$(extract_thread_id "$events_file")"
+      if [[ -z "$session_id" ]]; then
+        printf 'Error: could not capture Codex session id; keyed review requires session persistence\n' >&2
+        codex_status=5
+      elif ! printf '%s\n' "$session_id" > "$session_file"; then
+        printf 'Error: could not save Codex session state at %s\n' "$session_file" >&2
+        codex_status=5
+      fi
+    fi
+  fi
+
+  return "$codex_status"
 }
 
 prepare_kimi_workspace() {
@@ -496,47 +577,36 @@ prepare_kimi_workspace() {
   done < "$full_review_bundle" > "$kimi_workspace/review-scope.txt" || return
 }
 
-run_claude_review() {
-  local claude_status
-  if [[ -z "$session_file" ]]; then
-    run_claude "$prompt" --no-session-persistence
-    return $?
-  fi
-
-  if [[ -n "$session_id" ]]; then
-    run_claude "$prompt" --resume "$session_id"
-    claude_status=$?
-  else
-    claude_status=1
-  fi
-
-  if [[ "$claude_status" -ne 0 ]]; then
-    [[ -z "$session_id" ]] || printf 'Warning: Claude session %s could not be resumed; starting a new session\n' "$session_id" >&2
-    session_seed="$(printf '%s\0%s' "$session_hash" "$review_tmp" | git hash-object --stdin)"
-    session_id="${session_seed:0:8}-${session_seed:8:4}-4${session_seed:13:3}-8${session_seed:17:3}-${session_seed:20:12}"
-    # A fresh conversation cannot safely interpret an incremental patch alone.
-    run_claude "$full_prompt" --session-id "$session_id"
-    claude_status=$?
-    if [[ "$claude_status" -eq 0 ]]; then
-      # ponytail: direct write is enough because a corrupt ID self-heals via the retry above and same-reviewer rounds are serial by contract; add locking if that changes.
-      if ! printf '%s\n' "$session_id" > "$session_file"; then
-        printf 'Error: could not save Claude session state at %s\n' "$session_file" >&2
-        claude_status=5
-      fi
-    fi
-  fi
-
-  return "$claude_status"
+# The agent profile is the tool boundary for the unattended Kimi reviewer:
+# prompt mode runs on the auto permission policy, so tools must be removed,
+# not merely discouraged. An allowlist fails closed — naming drift strips
+# tools from an advisory reviewer instead of leaving Bash or Write reachable.
+prepare_kimi_agent() {
+  cat > "$kimi_agent_file" <<'EOF'
+---
+name: gate-specialist-reviewer
+description: Read-only specialist reviewer for a gated development workflow.
+tools: ["Read", "Grep", "Glob"]
+---
+You are a read-only specialist code reviewer. Your only tools are Read, Grep,
+and Glob; you cannot run shell commands, write files, fetch URLs, or delegate
+to subagents. Review exactly what the prompt scopes and return the verdict
+contract it specifies.
+EOF
 }
 
 run_kimi_review() {
-  local -a kimi_args=(--skills-dir "$kimi_skills_dir" -p "$kimi_prompt")
+  local -a kimi_args=(--skills-dir "$kimi_skills_dir" --agent-file "$kimi_agent_file" -p "$kimi_prompt")
   local -a kimi_env=(env -u OLDPWD)
   local name kimi_status
   local kimi_raw_report="$review_tmp/kimi-raw-report.txt"
   while IFS= read -r name; do
     [[ "$name" == GIT_* ]] && kimi_env+=(-u "$name")
   done < <(compgen -e)
+  # KIMI_CODE_EXPERIMENTAL_FLAG enables the v2 engine that honors
+  # --agent-file in prompt mode; without it Kimi 0.29.0 hard-errors, which is
+  # the desired visible failure rather than an unrestricted silent run.
+  kimi_env+=(KIMI_CODE_EXPERIMENTAL_FLAG=1)
   if (
     cd "$kimi_workspace"
     # stdin is pinned to /dev/null: kimi -p, like other CLIs, can block on an
@@ -552,8 +622,8 @@ run_kimi_review() {
 }
 
 if [[ "$review_with_kimi" -eq 1 ]]; then
-  if ! prepare_kimi_workspace; then
-    printf 'Warning: optional Kimi snapshot setup failed; continuing with Claude only\n' >&2
+  if ! prepare_kimi_workspace || ! prepare_kimi_agent; then
+    printf 'Warning: optional Kimi snapshot setup failed; continuing with Codex only\n' >&2
     review_with_kimi=0
   fi
 fi
@@ -562,7 +632,7 @@ if [[ "$review_with_kimi" -eq 1 ]]; then
   kimi_scope="${full_scope//$repo_root/$kimi_repo}"
   kimi_focus="${kimi_focus_arg//$repo_root/$kimi_repo}"
   IFS= read -r -d '' kimi_prompt <<EOF || true
-You are an optional specialist reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. You may use built-in Agent and AgentSwarm subagents. Do not invoke external reviewers or review-gate workflows, including Claude Code, Codex, CodeSearch, external model CLIs, or gate skills.
+You are an optional specialist reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. Your tools are restricted to Read, Grep, and Glob. Do not invoke external reviewers or review-gate workflows, including Claude Code, Codex, CodeSearch, external model CLIs, or gate skills.
 
 Repository snapshot: $kimi_repo
 Review mode: $mode
@@ -587,7 +657,7 @@ If the target is empty or you cannot inspect the required scope, return SKIPPED 
 Treat this invocation's full review bundle and repository snapshot files as authoritative.
 EOF
 fi
-claude_report="$review_tmp/claude-report.txt"
+codex_report="$review_tmp/codex-report.txt"
 kimi_report="$review_tmp/kimi-report.txt"
 
 set +e
@@ -595,15 +665,21 @@ set +e
 # bounded Kimi timeout and the interruption cleanup can terminate a whole
 # tree (sandbox wrapper included) without ever signaling the gate itself.
 set -m
-run_claude_review > "$claude_report" 2>&1 &
-claude_pid=$!
+run_codex_review > "$codex_report" 2>&1 &
+codex_pid=$!
 if [[ "$review_with_kimi" -eq 1 ]]; then
   run_kimi_review > "$kimi_report" 2>&1 &
   kimi_pid=$!
 fi
 set +m
-wait "$claude_pid"
-claude_status=$?
+wait "$codex_pid"
+codex_status=$?
+# The review runs in a background subshell, so a fallback-created session id
+# only exists in the session file; re-read it or the checkpoint below would
+# bind to a stale id and silently disable every later incremental round.
+if [[ -n "$session_file" && -s "$session_file" ]]; then
+  IFS= read -r session_id < "$session_file" || true
+fi
 kimi_status=0
 kimi_process_status=0
 kimi_timed_out=0
@@ -628,8 +704,12 @@ if [[ "$review_with_kimi" -eq 1 ]]; then
 fi
 set -e
 
-printf '=== Claude review ===\n'
-cat "$claude_report"
+printf '=== Codex review ===\n'
+if [[ -s "$codex_last_message" ]]; then
+  cat "$codex_last_message"
+else
+  cat "$codex_report"
+fi
 if [[ "$review_with_kimi" -eq 1 ]]; then
   printf '=== Kimi optional review ===\n'
   cat "$kimi_report"
@@ -641,12 +721,12 @@ if [[ "$before_fingerprint" != "$after_fingerprint" ]]; then
   exit 4
 fi
 
-if [[ "$claude_status" -eq 0 ]] && ! grep -q '[^[:space:]]' "$claude_report"; then
-  printf 'Error: Claude produced no review output; gate failed\n' >&2
-  claude_status=6
+if [[ "$codex_status" -eq 0 ]] && ! grep -q '[^[:space:]]' "$codex_last_message" 2>/dev/null; then
+  printf 'Error: Codex produced no final review message; gate failed\n' >&2
+  codex_status=6
 fi
 if [[ "$review_with_kimi" -eq 1 && "$kimi_timed_out" -eq 1 ]]; then
-  printf 'Warning: optional Kimi review timed out after %ss and was terminated; Claude remains the gate\n' "$kimi_grace" >&2
+  printf 'Warning: optional Kimi review timed out after %ss and was terminated; Codex remains the gate\n' "$kimi_grace" >&2
 elif [[ "$review_with_kimi" -eq 1 && "$kimi_status" -eq 0 ]] &&
    ! grep -q '[^[:space:]]' "$kimi_report"; then
   printf 'Warning: optional Kimi produced no review output\n' >&2
@@ -658,9 +738,9 @@ fi
 # records the state that produced findings so the next round can be incremental.
 has_review_verdict() {
   local last_verdict
-  # Kimi may decorate terminal output, and either reviewer may bold the final
-  # line. Select the last declared verdict so an eventual SKIPPED cannot be
-  # masked by an earlier PASS example or superseded conclusion.
+  # Either reviewer may decorate terminal output or bold the final line.
+  # Select the last declared verdict so an eventual SKIPPED cannot be masked
+  # by an earlier PASS example or superseded conclusion.
   last_verdict="$(
     LC_ALL=C sed $'s/\033\\[[0-9;]*[[:alpha:]]//g' "$1" |
       tr -d '\r*`' |
@@ -669,9 +749,9 @@ has_review_verdict() {
   printf '%s\n' "$last_verdict" |
     LC_ALL=C grep -Eq '^[^[:alnum:]]*VERDICT[[:space:]]*:[[:space:]]*(PASS|NEEDS REVISION)[^[:alnum:]]*$'
 }
-if [[ "$claude_status" -eq 0 ]] && ! has_review_verdict "$claude_report"; then
-  printf 'Error: Claude produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
-  claude_status=6
+if [[ "$codex_status" -eq 0 ]] && ! has_review_verdict "$codex_last_message"; then
+  printf 'Error: Codex produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
+  codex_status=6
 fi
 if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -eq 0 ]] &&
    ! has_review_verdict "$kimi_report"; then
@@ -679,22 +759,22 @@ if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -eq 0 ]] &&
   kimi_status=6
 fi
 
-if [[ "$claude_status" -ne 0 ]]; then
-  exit "$claude_status"
+if [[ "$codex_status" -ne 0 ]]; then
+  exit "$codex_status"
 fi
 if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -ne 0 && "$kimi_timed_out" -eq 0 ]]; then
   if [[ "$kimi_process_status" -ne 0 ]]; then
-    printf 'Warning: optional Kimi review did not complete through %s (exit %s); Claude remains the gate\n' \
+    printf 'Warning: optional Kimi review did not complete through %s (exit %s); Codex remains the gate\n' \
       "$sandbox_kind" "$kimi_process_status" >&2
   else
-    printf 'Warning: optional Kimi review output did not satisfy the verdict contract; Claude remains the gate\n' >&2
+    printf 'Warning: optional Kimi review output did not satisfy the verdict contract; Codex remains the gate\n' >&2
   fi
 fi
 
 if [[ -n "$reviewed_state_file" && -n "$base_oid" && -z "$status" ]]; then
   state_tmp="$reviewed_state_file.tmp.$$"
   if [[ -d "$reviewed_state_file" ]] ||
-     ! printf '%s %s\n' "$base_oid" "$head_oid" > "$state_tmp" ||
+     ! printf '%s %s %s\n' "$base_oid" "$head_oid" "$session_id" > "$state_tmp" ||
      ! mv -- "$state_tmp" "$reviewed_state_file"; then
     printf 'Error: could not save reviewed checkpoint at %s\n' "$reviewed_state_file" >&2
     exit 5

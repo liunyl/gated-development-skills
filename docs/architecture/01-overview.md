@@ -14,7 +14,7 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
 
 | Component | Responsibility | Repository source |
 |---|---|---|
-| Claude Code gate | Requires independent Codex review for non-trivial engineering work and quant backtests. | `claude/skills/codex-gated-development/SKILL.md` |
+| Claude Code gate | Routes complex or high-risk work through a mandatory Codex review in one persistent per-task session (`codex exec resume`), with optional tool-restricted Kimi review for named state-consistency risks. Kimi receives a detached snapshot through macOS `sandbox-exec` or Linux Bubblewrap under a `Read`/`Grep`/`Glob` agent-profile allowlist. | `claude/skills/codex-gated-development/SKILL.md`; `claude/skills/codex-gated-development/scripts/codex-review.sh` |
 | Codex gate | Routes complex or high-risk work through a mandatory Claude review, with optional targeted Kimi review for named state-consistency risks. Kimi receives a detached snapshot through macOS `sandbox-exec` or Linux Bubblewrap. | `codex/skills/claude-gated-development/SKILL.md`; `codex/skills/claude-gated-development/scripts/claude-review.sh` |
 | Kimi Code gate | Uses a judgment-based threshold and persistent Claude and Codex reviewer sessions. | `kimi/skills/kimi-gated-development/SKILL.md`; `kimi/skills/kimi-gated-development/scripts/` |
 | `bootstrap-project` | Builds an evidence-backed module map and settles the architecture taxonomy before prose, while allowing a repository with at most one durable module to keep readable detail in one overview and preserving an existing equivalent current-architecture hierarchy. | `shared/skills/bootstrap-project/SKILL.md`; `shared/skills/bootstrap-project/assets/`; `shared/skills/bootstrap-project/scripts/update-managed-block.sh` |
@@ -34,10 +34,12 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
    `shared/skills/bootstrap-project/scripts/update-managed-block.sh`)
 3. During implementation, follow the selected runtime's review gate and keep
    comments and architecture documentation current under the managed
-   engineering standards. The Codex gate performs a full first Claude review
-   per mode, then can use a verified commit checkpoint for later incremental
-   Claude rounds. Optional Kimi review is selected by named risk and always
-   receives a fresh full snapshot. (`claude/skills/codex-gated-development/SKILL.md`;
+   engineering standards. Both routed gates perform a full first external
+   review per mode, then can use a verified commit checkpoint for later
+   incremental rounds in the same persistent reviewer session. Optional Kimi
+   review is selected by named risk and always receives a fresh full
+   snapshot. (`claude/skills/codex-gated-development/SKILL.md`;
+   `claude/skills/codex-gated-development/scripts/codex-review.sh`;
    `codex/skills/claude-gated-development/SKILL.md`;
    `codex/skills/claude-gated-development/scripts/claude-review.sh`;
    `kimi/skills/kimi-gated-development/SKILL.md`;
@@ -71,27 +73,48 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
   repository uses `docs/architecture/` for current code, while `docs/plans/`
   and `docs/superpowers/` preserve historical change context.
   (`docs/README.md`; `shared/skills/bootstrap-project/SKILL.md`)
-- Codex gate checkpoints are scoped by repository, task session, and review
-  mode. Each `<session-file>.<mode>.reviewed` record stores the resolved task
-  base and the Claude-reviewed `HEAD`. A later `--since` request uses
-  `incremental-review-scope.txt` only when the Claude session and checkpoint
-  are trustworthy. Otherwise Claude receives the full task bundle, while dirty
-  or invalid commit ranges fail closed. Optional Kimi review has no checkpoint
-  and always receives the full task. Claude checkpoints advance after a valid
-  `PASS` or `NEEDS REVISION` report regardless of Kimi availability; a skipped
-  or malformed Claude review cannot establish incremental scope.
-  (`codex/skills/claude-gated-development/scripts/claude-review.sh`)
+- Gate checkpoints are scoped by repository, task session key, and review
+  mode in both wrapper scripts. Each `<session-file>.<mode>.reviewed` record
+  stores the resolved task base and the reviewed `HEAD`; the Claude-side
+  wrapper additionally stores and verifies the Codex session id, so a
+  checkpoint is honored only by the session that produced it. A later
+  `--since` request uses `incremental-review-scope.txt` only when the
+  reviewer session and checkpoint are trustworthy. Otherwise the reviewer
+  receives the full task bundle, while dirty or invalid commit ranges fail
+  closed. Optional Kimi review has no checkpoint and always receives the full
+  task. Checkpoints advance after a valid `PASS` or `NEEDS REVISION` report
+  regardless of Kimi availability; a skipped or malformed mandatory review
+  cannot establish incremental scope.
+  (`claude/skills/codex-gated-development/scripts/codex-review.sh`;
+  `codex/skills/claude-gated-development/scripts/claude-review.sh`)
+- Claude-side rounds sharing a session key are serialized by a `mkdir` lock
+  that fails loudly on overlap and is never removed silently, and the Codex
+  reviewer executes from a neutral working root outside the repository with
+  user config, rules, hooks, plugins, apps, and MCP servers disabled — the
+  reviewed repository can never configure its own reviewer, and
+  `mcp_servers={}` alone is insufficient because TOML table overrides merge.
+  (`claude/skills/codex-gated-development/scripts/codex-review.sh`)
 - Reviewer recursion is blocked at the external-gate boundary: Claude cannot
-  load `codex-gated-development`, while optional Kimi receives an empty skill
-  directory and instructions not to invoke Claude, Codex, CodeSearch, another
-  external model, or another review gate. Native Claude subagents and Kimi
-  `Agent`/`AgentSwarm` subagents remain available.
-  (`codex/skills/claude-gated-development/scripts/claude-review.sh`)
+  load `codex-gated-development`, the Codex reviewer is instructed not to
+  invoke gate skills, wrapper scripts, or other agent CLIs inside its
+  read-only sandbox, and optional Kimi receives an empty skill directory and
+  instructions not to invoke Claude, Codex, CodeSearch, another external
+  model, or another review gate. On the Codex side Kimi keeps
+  `Agent`/`AgentSwarm` subagents; on the Claude side Kimi is pinned by an
+  agent profile to `Read`, `Grep`, and `Glob` only (enabled through the v2
+  engine flag `KIMI_CODE_EXPERIMENTAL_FLAG=1`; a Kimi that rejects the
+  profile fails visibly and non-blockingly).
+  (`claude/skills/codex-gated-development/scripts/codex-review.sh`;
+  `codex/skills/claude-gated-development/scripts/claude-review.sh`)
 - Optional Kimi execution fails closed when the platform sandbox is unavailable.
   macOS denies live repository and Git paths with `sandbox-exec`; Linux masks
   them with read-only temporary filesystems inside Bubblewrap and uses a private
-  PID namespace and `/proc` mount to prevent host-root path bypasses.
-  (`codex/skills/claude-gated-development/scripts/claude-review.sh`; `README.md`)
+  PID namespace and `/proc` mount to prevent host-root path bypasses. Both
+  wrappers bound a still-running Kimi after the mandatory verdict
+  (`KIMI_REVIEW_GRACE_SECONDS`, then process-group termination with a
+  warning) so a hung optional reviewer cannot block the mandatory gate.
+  (`claude/skills/codex-gated-development/scripts/codex-review.sh`;
+  `codex/skills/claude-gated-development/scripts/claude-review.sh`; `README.md`)
 - The dependency-free engineering infrastructure test exercises shared assets,
   managed-block behavior, dogfood files, and installation documentation.
   (`tests/test-engineering-infrastructure.sh`)
@@ -100,7 +123,7 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
 
 | Claim | Repository source |
 |---|---|
-| Claude Code review gate | `claude/skills/codex-gated-development/` |
+| Claude Code review gate and Codex-session runner | `claude/skills/codex-gated-development/`; `claude/skills/codex-gated-development/scripts/codex-review.sh` |
 | Codex review gate | `codex/skills/claude-gated-development/` |
 | Kimi Code review gate | `kimi/skills/kimi-gated-development/` |
 | Repository bootstrap workflow and managed assets | `shared/skills/bootstrap-project/` |
