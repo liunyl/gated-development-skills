@@ -9,7 +9,7 @@ description: Use when engineering or quant work crosses module or integration bo
 
 Route by concrete risk, not diff size. Skip external review for local, reversible, single-path work with an obvious implementation and direct check.
 
-For triggered work, use Claude as the sole mandatory external gate. Use Kimi only as an optional specialist second opinion for concurrency, idempotency, database transactions, tenant isolation, or distributed-state risks. Kimi may use its built-in subagents, but must not call Claude, Codex, CodeSearch, another external model, or another review-gate workflow. Kimi availability, quota, transport failure, or missing verdict never blocks the Claude gate. Never ignore a valid Kimi finding merely because Kimi is optional.
+For triggered work, use Claude as the sole mandatory external gate. Use Kimi only as an optional specialist second opinion for concurrency, idempotency, database transactions, tenant isolation, or distributed-state risks. Kimi may use its built-in subagents, but must not call Claude, Codex, CodeSearch, another external model, or another review-gate workflow. Kimi availability, quota, transport failure, a hang, or a missing verdict never blocks the Claude gate; a Kimi round still running after the Claude verdict is terminated after a bounded grace with a warning. Never ignore a valid Kimi finding merely because Kimi is optional.
 
 For a real quant strategy, review the playbook and backtest code before the first real run.
 

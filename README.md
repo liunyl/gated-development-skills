@@ -1,22 +1,35 @@
 # gated-development-skills
 
-Gate skills for Claude Code, Codex CLI, and Kimi Code. The Codex-side
-`claude-gated-development` skill is complexity-routed: local, reversible,
-single-path work with a direct check skips external review, while concrete
-complex or high-risk work uses Claude as the sole mandatory external gate for
-planning and final reviews. Optional Kimi review is limited to named
-concurrency, idempotency, transaction, tenant-isolation, and distributed-state
-risks; Kimi quota or transport failure does not block Claude. Its real quant
-backtests remain gated before their first run. Each Claude review mode starts
-with the full task; after fixes are committed, later rounds in the same
-persistent Claude session can use `--since <previous-reviewed-head>` to send
-only the new commit range plus a full-task summary. Optional Kimi reviews use a
-fresh full snapshot, may use built-in subagents, and may not chain to another
-external reviewer or review gate.
+Gate skills for Claude Code, Codex CLI, and Kimi Code. Both routed gates are
+risk-routed rather than size-routed: local, reversible, single-path work with
+a direct check skips external review, while concrete complex or high-risk
+work uses the opposite runtime's model as the sole mandatory external gate
+for planning and final reviews. Risk triggers override artifact type —
+operative Markdown (skills, reviewer prompts, policy) gates like code. Real
+quant backtests remain gated before their first run.
+
+Each mandatory review mode starts with the full task; after fixes are
+committed, later rounds in the same persistent reviewer session can use
+`--since <previous-reviewed-head>` to send only the new commit range plus a
+full-task summary. On the Claude side the Codex reviewer session is resumed
+with `codex exec resume`, checkpoints additionally bind the reviewing session
+id, and a per-key lock serializes rounds. Optional Kimi review is limited to
+named concurrency, idempotency, transaction, tenant-isolation, and
+distributed-state risks; it always sees a fresh full snapshot through a
+native sandbox and never blocks the mandatory gate — Kimi quota, transport
+failure, or a hang degrades to a warning, and both runners terminate a hung
+Kimi after a bounded grace (`KIMI_REVIEW_GRACE_SECONDS`, default 300). On the
+Claude side Kimi additionally runs under an agent profile whose tool
+allowlist is exactly `Read`, `Grep`, and `Glob`; on the Codex side it may use
+built-in subagents. Kimi may not chain to another external reviewer or
+review gate.
+
+Both gates review changes in repositories you already trust enough to build
+and run locally; they do not make an untrusted repository safe to work in.
 
 | Skill | Lives in | Purpose |
 |-------|----------|---------|
-| `codex-gated-development` | Claude Code — `~/.claude/skills/` | Claude side: gate before Claude starts real work |
+| `codex-gated-development` | Claude Code — `~/.claude/skills/` | Claude side: risk-routed gate; Codex reviews in one persistent session per task (`--session-key`), with optional tool-restricted Kimi specialist review |
 | `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: gate complex/high-risk work with Claude; optionally target Kimi at named state-consistency risks |
 | `kimi-gated-development` | Kimi Code — `~/.kimi-code/skills/` | Kimi side: judgment-triggered dual gate — Claude and Codex review in parallel, each reusing one persistent session per task across all review rounds |
 
@@ -61,6 +74,21 @@ sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 ```
 
 That's it — each tool auto-discovers skills under its `skills/` dir.
+
+`codex-gated-development` needs an installed and authenticated `codex` CLI:
+the gate drives it headlessly and fails closed when the CLI is missing,
+unauthenticated, or incompatible. Tested with codex-cli 0.144.4; the runner
+requires `codex exec resume` and the JSONL `thread.started` event for session
+capture. Reviewer sessions persist under `${CODEX_HOME:-~/.codex}/sessions`;
+wiping them only costs a fresh full first review. The reviewer runs from a
+neutral working root with user config, rules, hooks, plugins, apps, and MCP
+servers disabled, so no configuration layer of the reviewed repository or
+user profile reaches the gate. The `openai-codex` Claude Code plugin is not
+required for the gate; rescue and stop-hook flows keep using the plugin
+independently. Optional Kimi review needs the `kimi` CLI (tested with Kimi
+0.29.0, whose v2 engine honors the runner's read-only agent profile via
+`KIMI_CODE_EXPERIMENTAL_FLAG=1`; a Kimi that rejects it degrades to a
+warning, never an unrestricted run).
 
 `kimi-gated-development` needs both the `claude` and `codex` CLIs installed
 and authenticated; its reviewers are review-only (read-only tool surface /
