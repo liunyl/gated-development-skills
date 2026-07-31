@@ -67,9 +67,10 @@ Write plans, specs, and playbooks to files before review. Untracked files count.
 1. Write the spec and implementation plan when the approach is not already fixed.
 2. Run one Claude `adversarial` planning gate before coding.
 3. Implement and run current verification.
-4. Simplify and perform the normal Codex PR review.
-5. Run one Claude `code` gate on the complete final diff.
-6. Finish the branch only after the latest Claude turn clears the final state.
+4. Use `code-simplifier:code-simplifier` on the complete task diff and apply only justified behavior-preserving simplifications. Rerun affected verification after any edit.
+5. Use `pr-review-toolkit:review-pr` on the complete task diff and follow its applicable-lane, subagent, confidence-filtering, and deduplication workflow. Triage every finding, fix valid findings, and rerun affected verification.
+6. Run one Claude `code` gate on the complete final diff.
+7. Finish the branch only after the latest Claude turn clears the final state.
 
 When the task contains a Kimi specialist risk, add the matching `--kimi-risk` values at the relevant planning or final gate. Do not request a broad second review. If Kimi returns a valid blocking finding, fix it and re-check that risk; if Kimi cannot complete, continue using Claude as the gate.
 
@@ -109,6 +110,8 @@ For incremental reruns, save the reviewed commit, commit the fixes, then use the
 - Mandatory final gate: `claude-review.sh code`.
 - Optional specialist review: add one or more supported `--kimi-risk` values.
 - Kimi may delegate internally, must not chain external review gates, and is operationally non-blocking.
+- Codex simplification pass: `code-simplifier:code-simplifier`.
+- Codex self-review: `pr-review-toolkit:review-pr`.
 - Full task scope: add `--base <commit-before-task>`.
 - Incremental fix scope: add `--since <previous-reviewed-head>`.
 - Verification: use `superpowers:verification-before-completion`.

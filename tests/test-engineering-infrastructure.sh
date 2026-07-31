@@ -573,6 +573,8 @@ grep -Fq 'KIMI_REVIEW_GRACE_SECONDS' "$CODEX_GATE_RUNNER"
 grep -Fq -- '--kimi-risk concurrency' "$CODEX_GATE"
 grep -Fq -- '--since <previous-reviewed-head>' "$CODEX_GATE"
 grep -Fq 'For incremental reruns, save the reviewed commit, commit the fixes' "$CODEX_GATE"
+grep -Fq 'Use `code-simplifier:code-simplifier` on the complete task diff' "$CODEX_GATE"
+grep -Fq 'Use `pr-review-toolkit:review-pr` on the complete task diff' "$CODEX_GATE"
 grep -Fq 'You may use built-in Agent and AgentSwarm subagents.' "$CODEX_GATE_RUNNER"
 grep -Fq 'Do not invoke external reviewers or review-gate workflows' "$CODEX_GATE_RUNNER"
 
