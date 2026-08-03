@@ -610,7 +610,7 @@ kimi_timed_out=0
 if [[ "$review_with_kimi" -eq 1 ]]; then
   # The mandatory verdict is already in hand; a still-running optional
   # reviewer gets a bounded grace, then its process group is terminated.
-  kimi_grace="${KIMI_REVIEW_GRACE_SECONDS:-300}"
+  kimi_grace="${KIMI_REVIEW_GRACE_SECONDS:-1800}"
   waited=0
   while kill -0 "$kimi_pid" 2>/dev/null && [[ "$waited" -lt "$kimi_grace" ]]; do
     sleep 1

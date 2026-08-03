@@ -18,7 +18,7 @@ named concurrency, idempotency, transaction, tenant-isolation, and
 distributed-state risks; it always sees a fresh full snapshot through a
 native sandbox and never blocks the mandatory gate — Kimi quota, transport
 failure, or a hang degrades to a warning, and both runners terminate a hung
-Kimi after a bounded grace (`KIMI_REVIEW_GRACE_SECONDS`, default 300). On the
+Kimi after a bounded grace (`KIMI_REVIEW_GRACE_SECONDS`, default 1800). On the
 Claude side Kimi additionally runs under an agent profile whose tool
 allowlist is exactly `Read`, `Grep`, and `Glob`; on the Codex side it may use
 built-in subagents. Kimi may not chain to another external reviewer or

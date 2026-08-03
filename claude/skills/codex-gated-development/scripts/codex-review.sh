@@ -22,7 +22,7 @@ second opinion for: concurrency, idempotency, database-transactions,
 tenant-isolation, or distributed-state. Kimi availability, transport failure,
 or a hang never fails the Codex gate; any valid finding it returns must still
 be triaged. A Kimi round still running after the Codex verdict is granted
-KIMI_REVIEW_GRACE_SECONDS (default 300) before its process group is terminated
+KIMI_REVIEW_GRACE_SECONDS (default 1800) before its process group is terminated
 with a warning.
 
 Session continuity: with --session-key (or CODEX_REVIEW_SESSION_KEY, or
@@ -686,7 +686,7 @@ kimi_timed_out=0
 if [[ "$review_with_kimi" -eq 1 ]]; then
   # The mandatory verdict is already in hand; a still-running optional
   # reviewer gets a bounded grace, then its process group is terminated.
-  kimi_grace="${KIMI_REVIEW_GRACE_SECONDS:-300}"
+  kimi_grace="${KIMI_REVIEW_GRACE_SECONDS:-1800}"
   waited=0
   while kill -0 "$kimi_pid" 2>/dev/null && [[ "$waited" -lt "$kimi_grace" ]]; do
     sleep 1
