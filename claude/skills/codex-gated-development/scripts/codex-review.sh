@@ -17,19 +17,17 @@ review mode has a verified persistent checkpoint produced by the same Codex
 session; otherwise review the full task. Incremental review requires a clean
 working tree.
 
-Codex is the mandatory reviewer. Repeat --kimi-risk to add a concurrent Kimi
-second opinion for: concurrency, idempotency, database-transactions,
-tenant-isolation, or distributed-state. Kimi availability, transport failure,
-or a hang never fails the Codex gate; any valid finding it returns must still
-be triaged. A Kimi round still running after the Codex verdict is granted
-KIMI_REVIEW_GRACE_SECONDS (default 1800) before its process group is terminated
-with a warning.
+Codex is always mandatory. Repeat --kimi-risk to select a concurrent Kimi
+review for: concurrency, idempotency, database-transactions, tenant-isolation,
+or distributed-state. Once selected, Kimi must complete with VERDICT: PASS;
+failure, NEEDS REVISION, invalid output, or KIMI_REVIEW_TIMEOUT_SECONDS
+(default 1800) blocks the gate.
 
 Session continuity: with --session-key (or CODEX_REVIEW_SESSION_KEY, or
 CLAUDE_CODE_SESSION_ID), one persistent Codex session per (repository, key) is
-reused across review rounds; distinct tasks must use distinct keys. Optional
-Kimi reviews always use a fresh full snapshot. Without any key the review runs
---ephemeral and nothing is persisted.
+reused across review rounds; distinct tasks must use distinct keys. Selected
+Kimi reviews keep an independent explicit session and checkpoint under the
+same key. Without any key both reviews run without reusable continuity.
 EOF
 }
 
@@ -101,54 +99,25 @@ done
 command -v git >/dev/null 2>&1 || die_usage "git is not installed"
 codex_bin="$(command -v codex 2>/dev/null)" || die_usage "codex CLI is not installed"
 review_with_kimi=0
-kimi_risk_list=""
-kimi_focus_arg=""
-kimi_bin=""
-sandbox_bin=""
-sandbox_kind=""
-sandbox_args=()
-sandbox_error=""
+kimi_runner=""
 if ((${#kimi_risks[@]})); then
-  printf -v kimi_risk_list '%s, ' "${kimi_risks[@]}"
-  kimi_risk_list="${kimi_risk_list%, }"
-  kimi_focus_arg="Audit only these risk classes: $kimi_risk_list."
   review_with_kimi=1
-  kimi_bin="$(command -v kimi 2>/dev/null || true)"
-  [[ -n "$kimi_bin" ]] || kimi_bin="${HOME:-}/.kimi-code/bin/kimi"
-  if [[ "$kimi_bin" != /* ]]; then
-    kimi_bin="$(cd "$(dirname "$kimi_bin")" && pwd -P)/$(basename "$kimi_bin")"
-  fi
-  if [[ ! -x "$kimi_bin" ]]; then
-    printf 'Warning: optional Kimi review unavailable: kimi CLI is not installed\n' >&2
-    review_with_kimi=0
+  if [[ -n "${GATED_KIMI_REVIEW_RUNNER:-}" ]]; then
+    kimi_runner="$GATED_KIMI_REVIEW_RUNNER"
   else
-    sandbox_platform="$(uname -s 2>/dev/null || true)"
-    case "$sandbox_platform" in
-      Darwin) sandbox_kind="sandbox-exec" ;;
-      Linux) sandbox_kind="bwrap" ;;
-      *)
-        if [[ -n "$sandbox_platform" ]]; then
-          printf 'Warning: optional Kimi review unavailable: platform %s has no supported native sandbox\n' "$sandbox_platform" >&2
-        else
-          printf 'Warning: optional Kimi review unavailable: could not detect the platform\n' >&2
-        fi
-        review_with_kimi=0
-        ;;
-    esac
-    if [[ "$review_with_kimi" -eq 1 ]]; then
-      sandbox_bin="/usr/bin/$sandbox_kind"
-    fi
-    if [[ "$review_with_kimi" -eq 1 && ! -x "$sandbox_bin" ]]; then
-      sandbox_bin="$(command -v "$sandbox_kind" 2>/dev/null || true)"
-      if [[ -n "$sandbox_bin" && "$sandbox_bin" != /* ]]; then
-        sandbox_bin="$(cd "$(dirname "$sandbox_bin")" && pwd -P)/$(basename "$sandbox_bin")"
-      fi
-    fi
-    if [[ "$review_with_kimi" -eq 1 && ! -x "$sandbox_bin" ]]; then
-      printf 'Warning: optional Kimi review unavailable: native %s is missing\n' "$sandbox_kind" >&2
-      review_with_kimi=0
+    script_path="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
+    source_root="$(cd "$(dirname "$0")/../../../.." && pwd -P)"
+    source_wrapper="$source_root/claude/skills/codex-gated-development/scripts/codex-review.sh"
+    source_runner="$source_root/shared/scripts/kimi-review.sh"
+    installed_runner="${XDG_DATA_HOME:-${HOME:-}/.local/share}/gated-development-skills/kimi-review.sh"
+    if [[ "$script_path" == "$source_wrapper" && -x "$source_runner" ]]; then
+      kimi_runner="$source_runner"
+    else
+      kimi_runner="$installed_runner"
     fi
   fi
+  [[ -x "$kimi_runner" ]] || die_usage \
+    "selected Kimi review requires the shared runner at $kimi_runner"
 fi
 if [[ "$codex_bin" == /* ]]; then
   export PATH="$(dirname "$codex_bin"):$PATH"
@@ -247,13 +216,6 @@ review_bundle="$full_review_bundle"
 # (.codex/config.toml) from configuring its reviewer, whatever its trust state.
 neutral_root="$review_tmp/neutral"
 mkdir -p "$neutral_root"
-sandbox_profile="$review_tmp/kimi.sb"
-kimi_skills_dir="$review_tmp/kimi-skills"
-kimi_agent_file="$review_tmp/kimi-reviewer-agent.md"
-if [[ "$review_with_kimi" -eq 1 ]] && ! mkdir -p "$kimi_skills_dir"; then
-  printf 'Warning: optional Kimi skills setup failed; continuing with Codex only\n' >&2
-  review_with_kimi=0
-fi
 
 session_key="${session_key_arg:-${CODEX_REVIEW_SESSION_KEY:-${CLAUDE_CODE_SESSION_ID:-}}}"
 session_file=""
@@ -262,7 +224,6 @@ reviewed_state_file=""
 reviewed_base=""
 reviewed_head=""
 reviewed_session=""
-kimi_workspace="$review_tmp/kimi-workspace"
 if [[ -n "$session_key" ]]; then
   session_dir="$git_common_dir/codex-review-sessions"
   mkdir -p "$session_dir"
@@ -316,65 +277,6 @@ else
   scope="$full_scope"
 fi
 
-sandbox_path() {
-  local value="$1"
-  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
-  value="${value//\\/\\\\}"
-  printf '%s' "${value//\"/\\\"}"
-}
-
-prepare_kimi_sandbox() {
-  local covered mask path sandbox_repo sandbox_common sandbox_git
-  local -a masks=("$repo_root")
-  if [[ "$sandbox_kind" == "sandbox-exec" ]]; then
-    sandbox_repo="$(sandbox_path "$repo_root")" || return
-    sandbox_common="$(sandbox_path "$git_common_dir")" || return
-    sandbox_git="$(sandbox_path "$git_dir")" || return
-    {
-      printf '(version 1)\n' &&
-      printf '(allow default)\n' &&
-      printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_repo" &&
-      printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_common" &&
-      printf '(deny file-read* file-write* (subpath "%s"))\n' "$sandbox_git"
-    } > "$sandbox_profile" || return
-    sandbox_args=(-f "$sandbox_profile")
-    return
-  fi
-
-  for path in "$git_common_dir" "$git_dir"; do
-    covered=0
-    for mask in "${masks[@]}"; do
-      if [[ "$path" == "$mask" || "$path" == "$mask/"* ]]; then
-        covered=1
-        break
-      fi
-    done
-    if [[ "$covered" -eq 0 ]]; then
-      masks+=("$path")
-    fi
-  done
-  # Match Seatbelt's allow-default policy: keep the host root and network
-  # available, then hide only the live repository and Git state below.
-  sandbox_args=(--die-with-parent --new-session --unshare-pid --bind / / --dev /dev --proc /proc)
-  for mask in "${masks[@]}"; do
-    sandbox_args+=(--tmpfs "$mask" --remount-ro "$mask")
-  done
-  sandbox_args+=(--)
-  # A private /proc prevents /proc/<host-pid>/root from bypassing the empty
-  # mounts that hide the live repository and external Git directories.
-  sandbox_error="$("$sandbox_bin" "${sandbox_args[@]}" /bin/true 2>&1 >/dev/null)"
-}
-
-if [[ "$review_with_kimi" -eq 1 ]] && ! prepare_kimi_sandbox; then
-  printf 'Warning: optional Kimi sandbox setup failed; continuing with Codex only' >&2
-  if [[ -n "$sandbox_error" ]]; then
-    printf ': %s\n' "$sandbox_error" >&2
-  else
-    printf '\n' >&2
-  fi
-  review_with_kimi=0
-fi
-
 {
   printf 'Repository: %s\n' "$repo_root"
   printf 'Review mode: %s\n' "$mode"
@@ -396,7 +298,7 @@ fi
   git -C "$repo_root" ls-files --others --exclude-standard
 } > "$full_review_bundle"
 
-if [[ "$incremental_active" -eq 1 ]]; then
+if [[ -n "$since_oid" ]]; then
   {
     printf 'Repository: %s\n' "$repo_root"
     printf 'Review mode: %s\n' "$mode"
@@ -413,6 +315,8 @@ if [[ "$incremental_active" -eq 1 ]]; then
     git -C "$repo_root" diff --stat "$base_oid"..."$head_oid" --
     git -C "$repo_root" diff --name-status "$base_oid"..."$head_oid" --
   } > "$incremental_review_bundle"
+fi
+if [[ "$incremental_active" -eq 1 ]]; then
   review_bundle="$incremental_review_bundle"
 fi
 
@@ -423,6 +327,7 @@ else
 fi
 
 repo_fingerprint() {
+  local file_mode path
   {
     git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unborn HEAD\n'
     git -C "$repo_root" status --porcelain=v1 -z --untracked-files=all
@@ -551,129 +456,41 @@ run_codex_review() {
   return "$codex_status"
 }
 
-prepare_kimi_workspace() {
-  local line kimi_repo path snapshot_paths
-  mkdir -p "$kimi_workspace" || return
-  kimi_workspace="$(cd "$kimi_workspace" && pwd -P)" || return
-  kimi_repo="$kimi_workspace/repo"
-  snapshot_paths="$kimi_workspace/snapshot-paths"
-  rm -rf "$kimi_workspace/repo" || return
-  mkdir -p "$kimi_workspace/repo" || return
-  git -C "$repo_root" ls-files --cached --others --exclude-standard -z > "$snapshot_paths" || return
-  while IFS= read -r -d '' path; do
-    [[ -e "$repo_root/$path" || -L "$repo_root/$path" ]] || continue
-    mkdir -p "$kimi_workspace/repo/$(dirname "$path")" || return
-    if [[ -L "$repo_root/$path" ]]; then
-      printf 'symlink\n' > "$kimi_workspace/repo/$path" || return
-    elif [[ -d "$repo_root/$path" ]]; then
-      mkdir -p "$kimi_workspace/repo/$path" || return
-      printf 'gitlink\n' > "$kimi_workspace/repo/$path/.gitlink" || return
-    else
-      cp -p -- "$repo_root/$path" "$kimi_workspace/repo/$path" || return
-    fi
-  done < "$snapshot_paths"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    printf '%s\n' "${line//$repo_root/$kimi_repo}" || return
-  done < "$full_review_bundle" > "$kimi_workspace/review-scope.txt" || return
-}
-
-# The agent profile is the tool boundary for the unattended Kimi reviewer:
-# prompt mode runs on the auto permission policy, so tools must be removed,
-# not merely discouraged. An allowlist fails closed — naming drift strips
-# tools from an advisory reviewer instead of leaving Bash or Write reachable.
-prepare_kimi_agent() {
-  cat > "$kimi_agent_file" <<'EOF'
----
-name: gate-specialist-reviewer
-description: Read-only specialist reviewer for a gated development workflow.
-tools: ["Read", "Grep", "Glob"]
----
-You are a read-only specialist code reviewer. Your only tools are Read, Grep,
-and Glob; you cannot run shell commands, write files, fetch URLs, or delegate
-to subagents. Review exactly what the prompt scopes and return the verdict
-contract it specifies.
-EOF
-}
-
-run_kimi_review() {
-  local -a kimi_args=(--skills-dir "$kimi_skills_dir" --agent-file "$kimi_agent_file" -p "$kimi_prompt")
-  local -a kimi_env=(env -u OLDPWD)
-  local name kimi_status
-  local kimi_raw_report="$review_tmp/kimi-raw-report.txt"
-  while IFS= read -r name; do
-    [[ "$name" == GIT_* ]] && kimi_env+=(-u "$name")
-  done < <(compgen -e)
-  # KIMI_CODE_EXPERIMENTAL_FLAG enables the v2 engine that honors
-  # --agent-file in prompt mode; without it Kimi 0.29.0 hard-errors, which is
-  # the desired visible failure rather than an unrestricted silent run.
-  kimi_env+=(KIMI_CODE_EXPERIMENTAL_FLAG=1)
-  if (
-    cd "$kimi_workspace"
-    # stdin is pinned to /dev/null: kimi -p, like other CLIs, can block on an
-    # open stdin pipe (e.g. under background runners).
-    "${kimi_env[@]}" "$sandbox_bin" "${sandbox_args[@]}" "$kimi_bin" "${kimi_args[@]}" < /dev/null
-  ) > "$kimi_raw_report" 2>&1; then
-    kimi_status=0
-  else
-    kimi_status=$?
-  fi
-  cat "$kimi_raw_report"
-  return "$kimi_status"
-}
-
+kimi_runner_args=()
 if [[ "$review_with_kimi" -eq 1 ]]; then
-  if ! prepare_kimi_workspace || ! prepare_kimi_agent; then
-    printf 'Warning: optional Kimi snapshot setup failed; continuing with Codex only\n' >&2
-    review_with_kimi=0
+  kimi_runner_args=(
+    --repo "$repo_root"
+    --mode "$mode"
+    --full-bundle "$full_review_bundle"
+    --head "$head_oid"
+    --focus "$focus"
+  )
+  [[ -z "$base_oid" ]] || kimi_runner_args+=(--base "$base_oid")
+  if [[ -n "$since_oid" ]]; then
+    kimi_runner_args+=(--since "$since_oid" --incremental-bundle "$incremental_review_bundle")
   fi
-fi
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  kimi_repo="$kimi_workspace/repo"
-  kimi_scope="${full_scope//$repo_root/$kimi_repo}"
-  kimi_focus="${kimi_focus_arg//$repo_root/$kimi_repo}"
-  IFS= read -r -d '' kimi_prompt <<EOF || true
-You are an optional specialist reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. Your tools are restricted to Read, Grep, and Glob. Do not invoke external reviewers or review-gate workflows, including Claude Code, Codex, CodeSearch, external model CLIs, or gate skills.
-
-Repository snapshot: $kimi_repo
-Review mode: $mode
-Scope contract: $kimi_scope
-Precomputed review bundle: $kimi_workspace/review-scope.txt
-Kimi risk classes: $kimi_risk_list
-Review focus: $kimi_focus
-Review lens: $lens
-
-Read the precomputed review bundle first, then inspect applicable CLAUDE.md and AGENTS.md guidance and the named repository snapshot files. Verify that the review scope is non-empty and contains the artifact's actual substance; do not rely on a prompt summary when the code or document is available.
-
-Return:
-1. Scope examined: exact refs, diffs, and files reviewed.
-2. Blocking findings: only reproducible material defects within the requested Kimi risk classes. Give priority, file:line, evidence, impact, and the smallest sound remedy.
-3. Residual findings: optional style, alternative designs, or speculative hardening, clearly separated.
-4. Verdict: PASS only when there is no valid unaddressed blocking finding; otherwise NEEDS REVISION.
-
-End with exactly one machine-readable line: VERDICT: PASS, VERDICT: NEEDS REVISION, or VERDICT: SKIPPED.
-
-If the target is empty or you cannot inspect the required scope, return SKIPPED rather than PASS.
-
-Treat this invocation's full review bundle and repository snapshot files as authoritative.
-EOF
+  [[ -z "$session_key" ]] || kimi_runner_args+=(--session-key "$session_key")
+  for risk in "${kimi_risks[@]}"; do
+    kimi_runner_args+=(--risk "$risk")
+  done
 fi
 codex_report="$review_tmp/codex-report.txt"
 kimi_report="$review_tmp/kimi-report.txt"
 
 set +e
-# Job control gives each reviewer pipeline its own process group so the
-# bounded Kimi timeout and the interruption cleanup can terminate a whole
-# tree (sandbox wrapper included) without ever signaling the gate itself.
+# Job control gives each reviewer its own process group so interruption cleanup
+# can terminate the primary reviewer and the shared Kimi runner independently.
 set -m
 run_codex_review > "$codex_report" 2>&1 &
 codex_pid=$!
 if [[ "$review_with_kimi" -eq 1 ]]; then
-  run_kimi_review > "$kimi_report" 2>&1 &
+  "$kimi_runner" "${kimi_runner_args[@]}" > "$kimi_report" &
   kimi_pid=$!
 fi
 set +m
 wait "$codex_pid"
 codex_status=$?
+codex_pid=""
 # The review runs in a background subshell, so a fallback-created session id
 # only exists in the session file; re-read it or the checkpoint below would
 # bind to a stale id and silently disable every later incremental round.
@@ -681,26 +498,10 @@ if [[ -n "$session_file" && -s "$session_file" ]]; then
   IFS= read -r session_id < "$session_file" || true
 fi
 kimi_status=0
-kimi_process_status=0
-kimi_timed_out=0
 if [[ "$review_with_kimi" -eq 1 ]]; then
-  # The mandatory verdict is already in hand; a still-running optional
-  # reviewer gets a bounded grace, then its process group is terminated.
-  kimi_grace="${KIMI_REVIEW_GRACE_SECONDS:-1800}"
-  waited=0
-  while kill -0 "$kimi_pid" 2>/dev/null && [[ "$waited" -lt "$kimi_grace" ]]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
-  if kill -0 "$kimi_pid" 2>/dev/null; then
-    kimi_timed_out=1
-    kill -TERM -- "-$kimi_pid" 2>/dev/null
-    sleep 2
-    kill -KILL -- "-$kimi_pid" 2>/dev/null
-  fi
   wait "$kimi_pid"
   kimi_status=$?
-  kimi_process_status=$kimi_status
+  kimi_pid=""
 fi
 set -e
 
@@ -711,7 +512,7 @@ else
   cat "$codex_report"
 fi
 if [[ "$review_with_kimi" -eq 1 ]]; then
-  printf '=== Kimi optional review ===\n'
+  printf '=== Kimi selected review ===\n'
   cat "$kimi_report"
 fi
 
@@ -725,50 +526,35 @@ if [[ "$codex_status" -eq 0 ]] && ! grep -q '[^[:space:]]' "$codex_last_message"
   printf 'Error: Codex produced no final review message; gate failed\n' >&2
   codex_status=6
 fi
-if [[ "$review_with_kimi" -eq 1 && "$kimi_timed_out" -eq 1 ]]; then
-  printf 'Warning: optional Kimi review timed out after %ss and was terminated; Codex remains the gate\n' "$kimi_grace" >&2
-elif [[ "$review_with_kimi" -eq 1 && "$kimi_status" -eq 0 ]] &&
-   ! grep -q '[^[:space:]]' "$kimi_report"; then
-  printf 'Warning: optional Kimi produced no review output\n' >&2
-  kimi_status=6
-fi
-
-# A successful process is not a successful review when the reviewer skipped
-# the scope or ignored the output contract. NEEDS REVISION is valid here: it
-# records the state that produced findings so the next round can be incremental.
-has_review_verdict() {
-  local last_verdict
-  # Either reviewer may decorate terminal output or bold the final line.
-  # Select the last declared verdict so an eventual SKIPPED cannot be masked
-  # by an earlier PASS example or superseded conclusion.
-  last_verdict="$(
+# NEEDS REVISION is valid checkpoint evidence, but only PASS clears the gate.
+# Enforce the prompt contract against the final nonempty line so trailing text
+# cannot accidentally turn an incomplete response into a successful review.
+review_verdict() {
+  local last_line
+  last_line="$(
     LC_ALL=C sed $'s/\033\\[[0-9;]*[[:alpha:]]//g' "$1" |
       tr -d '\r*`' |
-      awk '/^[^[:alnum:]]*VERDICT[[:space:]]*:/{ verdict=$0 } END { print verdict }'
+      awk 'NF { line=$0 } END { print line }'
   )"
-  printf '%s\n' "$last_verdict" |
-    LC_ALL=C grep -Eq '^[^[:alnum:]]*VERDICT[[:space:]]*:[[:space:]]*(PASS|NEEDS REVISION)[^[:alnum:]]*$'
+  if printf '%s\n' "$last_line" | LC_ALL=C grep -Eq \
+    '^[^[:alnum:]]*VERDICT[[:space:]]*:[[:space:]]*PASS[^[:alnum:]]*$'; then
+    printf 'PASS\n'
+  elif printf '%s\n' "$last_line" | LC_ALL=C grep -Eq \
+    '^[^[:alnum:]]*VERDICT[[:space:]]*:[[:space:]]*NEEDS REVISION[^[:alnum:]]*$'; then
+    printf 'NEEDS REVISION\n'
+  else
+    return 1
+  fi
 }
-if [[ "$codex_status" -eq 0 ]] && ! has_review_verdict "$codex_last_message"; then
-  printf 'Error: Codex produced no valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
-  codex_status=6
+codex_verdict=""
+if [[ "$codex_status" -eq 0 ]]; then
+  if ! codex_verdict="$(review_verdict "$codex_last_message")"; then
+    printf 'Error: Codex final nonempty line is not a valid PASS or NEEDS REVISION verdict; gate failed\n' >&2
+    codex_status=6
+  fi
 fi
-if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -eq 0 ]] &&
-   ! has_review_verdict "$kimi_report"; then
-  printf 'Warning: optional Kimi produced no valid PASS or NEEDS REVISION verdict\n' >&2
-  kimi_status=6
-fi
-
 if [[ "$codex_status" -ne 0 ]]; then
   exit "$codex_status"
-fi
-if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -ne 0 && "$kimi_timed_out" -eq 0 ]]; then
-  if [[ "$kimi_process_status" -ne 0 ]]; then
-    printf 'Warning: optional Kimi review did not complete through %s (exit %s); Codex remains the gate\n' \
-      "$sandbox_kind" "$kimi_process_status" >&2
-  else
-    printf 'Warning: optional Kimi review output did not satisfy the verdict contract; Codex remains the gate\n' >&2
-  fi
 fi
 
 if [[ -n "$reviewed_state_file" && -n "$base_oid" && -z "$status" ]]; then
@@ -780,3 +566,8 @@ if [[ -n "$reviewed_state_file" && -n "$base_oid" && -z "$status" ]]; then
     exit 5
   fi
 fi
+
+if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -ne 0 ]]; then
+  exit "$kimi_status"
+fi
+[[ "$codex_verdict" == "PASS" ]] || exit 8

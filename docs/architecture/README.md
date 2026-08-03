@@ -10,3 +10,4 @@ Read the documents in numbered order:
 | Claim | Repository source |
 |---|---|
 | Review gates, shared skills, installation, and verification | `docs/architecture/01-overview.md` |
+| Shared Kimi runner interface and lifecycle | `docs/architecture/01-overview.md` |

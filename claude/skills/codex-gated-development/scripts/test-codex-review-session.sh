@@ -2,9 +2,20 @@
 set -euo pipefail
 
 runner="$(cd "$(dirname "$0")" && pwd)/codex-review.sh"
+shared_runner="$(cd "$(dirname "$runner")/../../../.." && pwd -P)/shared/scripts/kimi-review.sh"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/codex-review-test.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/home/.kimi-code/bin" "$tmp/bundles"
+mkdir -p "$tmp/bin" "$tmp/home/.kimi-code/bin"
+kimi_source_home="$(cd "$tmp/home/.kimi-code" && pwd -P)"
+kimi_source_hash="$(printf '%s' "$kimi_source_home" | git hash-object --stdin)"
+kimi_test_runtime="$tmp/home/.cache/gated-development-skills/kimi-review-runtime/$kimi_source_hash"
+mkdir -p "$kimi_test_runtime/bundles"
+ln -s "$kimi_test_runtime/bundles" "$tmp/bundles"
+: > "$kimi_test_runtime/kimi.log"
+ln -s "$kimi_test_runtime/kimi.log" "$tmp/kimi.log"
+for marker in kimi.hang; do
+  ln -s "$kimi_test_runtime/$marker" "$tmp/$marker"
+done
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -60,9 +71,12 @@ if [[ -n "$out" ]]; then
   printf 'fake codex review\n' > "$out"
   if [[ -n "${SKIP_VERDICT:-}" ]]; then
     printf 'VERDICT: SKIPPED\n' >> "$out"
+  elif [[ -n "${NEEDS_CODEX:-}" ]]; then
+    printf 'VERDICT: NEEDS REVISION\n' >> "$out"
   elif [[ -z "${UNRECOGNIZED_VERDICT:-}" ]]; then
     printf 'VERDICT: PASS\n' >> "$out"
   fi
+  [[ -z "${TRAILING_CODEX:-}" ]] || printf 'trailing Codex text\n' >> "$out"
 fi
 if [[ "$seen_resume" -eq 0 ]]; then
   if [[ -n "${BAD_THREAD_EVENT:-}" ]]; then
@@ -85,27 +99,24 @@ if [[ -t 0 || -p /dev/stdin ]]; then
   printf 'fake kimi: stdin must be pinned to /dev/null\n' >&2
   exit 97
 fi
-[[ "${KIMI_CODE_EXPERIMENTAL_FLAG:-}" == "1" ]] || exit 30
+[[ "$HOME" == "$KIMI_CODE_HOME/home" ]] || exit 98
+: > /dev/null || exit 99
 [[ -d "$PWD/repo" && -f "$PWD/review-scope.txt" ]] || exit 7
 if grep -Fq -- "$LIVE_REPO" "$PWD/review-scope.txt"; then
   exit 12
 fi
-agent_file=""
 skills_dir=""
 review_prompt=""
 previous=""
 for arg in "$@"; do
-  [[ "$previous" != "--agent-file" ]] || agent_file="$arg"
   [[ "$previous" != "--skills-dir" ]] || skills_dir="$arg"
   [[ "$previous" != "-p" ]] || review_prompt="$arg"
   previous="$arg"
 done
-[[ -n "$agent_file" && -f "$agent_file" ]] || exit 31
-grep -Fq 'tools: ["Read", "Grep", "Glob"]' "$agent_file" || exit 32
 [[ -d "$skills_dir" ]] || exit 24
 [[ -z "$(find "$skills_dir" -mindepth 1 -print -quit)" ]] || exit 25
 [[ "$review_prompt" == *'End with exactly one machine-readable line: VERDICT: PASS'* ]] || exit 26
-[[ "$review_prompt" == *'Your tools are restricted to Read, Grep, and Glob.'* ]] || exit 27
+[[ "$review_prompt" == *'You may use built-in Agent and AgentSwarm subagents.'* ]] || exit 27
 [[ "$review_prompt" == *'Do not invoke external reviewers or review-gate workflows'* ]] || exit 34
 [[ "$review_prompt" == *'concurrency, idempotency, database-transactions'* ]] || exit 28
 for arg in "$@"; do
@@ -125,6 +136,7 @@ fi
 if [[ -z "${NO_KIMI_LAST_MESSAGE:-}" ]]; then
   printf 'fake kimi review\n'
   printf 'VERDICT: PASS\n'
+  printf 'To resume this session: kimi -r session_fake_review_id\n' >&2
 fi
 EOF
 chmod +x "$tmp/home/.kimi-code/bin/kimi"
@@ -146,11 +158,12 @@ run_review() {
   local -a review_env runner_args
   review_env=(
     HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    CODEX_LOG="$tmp/codex.log" KIMI_LOG="$tmp/kimi.log"
-    BUNDLE_CAPTURE="$tmp/bundles"
+    CODEX_LOG="$tmp/codex.log" KIMI_LOG="$kimi_test_runtime/kimi.log"
+    BUNDLE_CAPTURE="$kimi_test_runtime/bundles"
     LIVE_REPO="$(git -C "$repo" rev-parse --show-toplevel)"
-    KIMI_HANG_MARKER="$tmp/kimi.hang"
+    KIMI_HANG_MARKER="$kimi_test_runtime/kimi.hang"
   )
+  [[ -z "${XDG_DATA_HOME:-}" ]] || review_env+=(XDG_DATA_HOME="$XDG_DATA_HOME")
   runner_args=("$mode" --focus test)
   if [[ "${INCLUDE_KIMI:-1}" -eq 1 ]]; then
     if [[ "${INVALID_KIMI_RISK:-0}" -eq 1 ]]; then
@@ -269,7 +282,8 @@ for call_no in 1 2; do
   call_cwd="$(cwd_of_call "$call_no")"
   [[ -n "$call_cwd" && "$call_cwd" != "$repo_a"* ]] || fail 'reviewer ran from inside the reviewed repository'
 done
-[[ "$(sed -n '1p' "$tmp/kimi.log")" == *--agent-file* ]] || fail 'Kimi call omitted the agent profile'
+[[ "$(sed -n '1p' "$tmp/kimi.log")" != *--agent-file* ]] || fail 'Kimi unexpectedly used an agent profile'
+[[ "$(sed -n '2p' "$tmp/kimi.log")" == *--session*session_fake_review_id* ]] || fail 'Kimi session was not resumed'
 
 # A stale session falls back to a fresh full-scope session and re-persists.
 FAIL_RESUME_MARKER="$tmp/failed-resume"; export FAIL_RESUME_MARKER
@@ -307,16 +321,16 @@ last_line="$(tail -n 1 "$tmp/codex.log")"
 # session id is the final fallback.
 (cd "$repo_a" && env -u CLAUDE_CODE_SESSION_ID CODEX_REVIEW_SESSION_KEY=env-loser \
   HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-  CODEX_LOG="$tmp/codex.log" KIMI_LOG="$tmp/kimi.log" BUNDLE_CAPTURE="$tmp/bundles" \
-  LIVE_REPO="$repo_a" KIMI_HANG_MARKER="$tmp/kimi.hang" \
+  CODEX_LOG="$tmp/codex.log" KIMI_LOG="$kimi_test_runtime/kimi.log" BUNDLE_CAPTURE="$kimi_test_runtime/bundles" \
+  LIVE_REPO="$repo_a" KIMI_HANG_MARKER="$kimi_test_runtime/kimi.hang" \
   "$runner" adversarial --focus test --session-key arg-winner >/dev/null 2>>"$tmp/review.stderr")
 [[ -n "$(state_content "$repo_a" arg-winner)" ]] || fail '--session-key did not create its own session state'
 [[ -z "$(state_content "$repo_a" env-loser)" ]] || fail '--session-key did not override CODEX_REVIEW_SESSION_KEY'
 
 (cd "$repo_a" && env -u CODEX_REVIEW_SESSION_KEY CLAUDE_CODE_SESSION_ID=claude-fallback \
   HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-  CODEX_LOG="$tmp/codex.log" KIMI_LOG="$tmp/kimi.log" BUNDLE_CAPTURE="$tmp/bundles" \
-  LIVE_REPO="$repo_a" KIMI_HANG_MARKER="$tmp/kimi.hang" \
+  CODEX_LOG="$tmp/codex.log" KIMI_LOG="$kimi_test_runtime/kimi.log" BUNDLE_CAPTURE="$kimi_test_runtime/bundles" \
+  LIVE_REPO="$repo_a" KIMI_HANG_MARKER="$kimi_test_runtime/kimi.hang" \
   "$runner" adversarial --focus test >/dev/null 2>>"$tmp/review.stderr")
 [[ -n "$(state_content "$repo_a" claude-fallback)" ]] || fail 'CLAUDE_CODE_SESSION_ID fallback did not persist a session'
 
@@ -358,6 +372,12 @@ fi
 if (cd "$repo_a" && SKIP_VERDICT=1 run_review "$repo_a" skipped-verdict); then
   fail 'SKIPPED-only verdict did not fail the gate'
 fi
+if (cd "$repo_a" && NEEDS_CODEX=1 run_review "$repo_a" needs-revision); then
+  fail 'Codex NEEDS REVISION did not block the gate'
+fi
+if (cd "$repo_a" && TRAILING_CODEX=1 run_review "$repo_a" trailing-verdict); then
+  fail 'Codex PASS followed by trailing text did not block the gate'
+fi
 
 # A keyed round that cannot capture the thread id must fail, not degrade.
 if (cd "$repo_a" && BAD_THREAD_EVENT=1 run_review "$repo_a" no-capture); then
@@ -373,24 +393,26 @@ if (cd "$repo_a" && MUTATE_FILE="$mut_target" run_review "$repo_a" mode-mutation
 fi
 rm -f "$mut_target"
 
-# A hung optional Kimi is terminated after the grace and never blocks.
-rm -f "$tmp/kimi.hang"
+# A selected Kimi is bounded by the shared runner and timeout is a gate failure.
+rm -f "$kimi_test_runtime/kimi.hang"
 hang_start="$(date +%s)"
-(cd "$repo_a" && HANG_KIMI=1 KIMI_REVIEW_GRACE_SECONDS=1 run_review "$repo_a" task-a) \
-  || fail 'hung optional Kimi failed the Codex gate'
+if (cd "$repo_a" && HANG_KIMI=1 KIMI_REVIEW_TIMEOUT_SECONDS=2 \
+  KIMI_REVIEW_HEARTBEAT_SECONDS=1 run_review "$repo_a" task-a); then
+  fail 'timed-out selected Kimi did not block the gate'
+fi
 hang_elapsed="$(( $(date +%s) - hang_start ))"
 [[ -e "$tmp/kimi.hang" ]] || fail 'hang scenario never reached the fake Kimi'
-[[ "$hang_elapsed" -lt 60 ]] || fail 'hung Kimi was not terminated within the grace window'
-grep -Fq 'optional Kimi review timed out' "$tmp/review.stderr" || fail 'Kimi timeout warning was omitted'
-grep -Fq 'VERDICT: PASS' "$tmp/review.stdout" || fail 'Codex verdict was not printed after Kimi timeout'
+[[ "$hang_elapsed" -lt 60 ]] || fail 'hung Kimi was not terminated within the timeout'
+grep -Fq '[Kimi] IDLE' "$tmp/review.stderr" || fail 'Kimi heartbeat was omitted'
+grep -Fq '[Kimi] TIMED_OUT' "$tmp/review.stderr" || fail 'Kimi timeout status was omitted'
 (cd "$repo_a" && run_review "$repo_a" task-a) || fail 'lock was not released after Kimi timeout'
 
-# Optional Kimi failures stay warnings.
+# Selected Kimi failures block the gate.
 FAIL_KIMI=1; export FAIL_KIMI
-(cd "$repo_a" && run_review "$repo_a" task-a) || {
+if (cd "$repo_a" && run_review "$repo_a" task-a); then
   unset FAIL_KIMI
-  fail 'optional Kimi failure blocked Codex'
-}
+  fail 'selected Kimi failure did not block Codex'
+fi
 unset FAIL_KIMI
 
 # An interrupted wrapper terminates the reviewer process group before it
@@ -400,8 +422,8 @@ rm -f "$tmp/codex.hang"
 (
   cd "$repo_a" && exec env -u CODEX_REVIEW_SESSION_KEY -u CLAUDE_CODE_SESSION_ID \
     HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    CODEX_LOG="$tmp/codex.log" KIMI_LOG="$tmp/kimi.log" BUNDLE_CAPTURE="$tmp/bundles" \
-    LIVE_REPO="$repo_a" KIMI_HANG_MARKER="$tmp/kimi.hang" \
+    CODEX_LOG="$tmp/codex.log" KIMI_LOG="$kimi_test_runtime/kimi.log" BUNDLE_CAPTURE="$kimi_test_runtime/bundles" \
+    LIVE_REPO="$repo_a" KIMI_HANG_MARKER="$kimi_test_runtime/kimi.hang" \
     HANG_CODEX=1 CODEX_HANG_MARKER="$tmp/codex.hang" \
     "$runner" adversarial --focus test --session-key interrupt-task
 ) >/dev/null 2>>"$tmp/review.stderr" &
@@ -453,7 +475,9 @@ kimi_incremental="$(last_bundle kimi "$tmp/kimi.log")"
 grep -Fq 'NEW_PATCH_BODY' "$codex_incremental" || fail 'Codex incremental bundle omitted the new commit body'
 ! grep -Fq 'OLD_PATCH_BODY' "$codex_incremental" || fail 'Codex incremental bundle repeated an old patch body'
 grep -Fq '## Full task summary' "$codex_incremental" || fail 'Codex incremental bundle omitted the full-task summary'
-grep -Fq 'OLD_PATCH_BODY' "$kimi_incremental" || fail 'Kimi did not receive the full task'
+grep -Fq 'NEW_PATCH_BODY' "$kimi_incremental" || fail 'Kimi incremental bundle omitted the new commit body'
+! grep -Fq 'OLD_PATCH_BODY' "$kimi_incremental" || fail 'Kimi incremental bundle repeated an old patch body'
+grep -Fq '## Full task summary' "$kimi_incremental" || fail 'Kimi incremental bundle omitted the full-task summary'
 
 incremental_hash="$(session_hash_for "$repo_incremental" incremental-task)"
 incremental_state="$(state_dir_of "$repo_incremental")/$incremental_hash.adversarial.reviewed"
@@ -513,5 +537,18 @@ grep -Fq 'OLD_PATCH_BODY' "$(last_bundle codex "$tmp/codex.log")" \
 fallback_session="$(state_content "$repo_incremental" incremental-task)"
 [[ "$(cat "$incremental_state")" == *" $fallback_session" ]] \
   || fail 'checkpoint did not rebind to the fallback session'
+
+installed_data="$tmp/xdg-data/gated-development-skills"
+copied_wrapper="$tmp/fake-home/.claude/skills/codex-gated-development/scripts/codex-review.sh"
+mkdir -p "$installed_data" "$(dirname "$copied_wrapper")" "$tmp/fake-home/shared/scripts"
+cp "$shared_runner" "$installed_data/kimi-review.sh"
+cp "$runner" "$copied_wrapper"
+cp /usr/bin/false "$tmp/fake-home/shared/scripts/kimi-review.sh"
+chmod +x "$installed_data/kimi-review.sh" "$copied_wrapper" "$tmp/fake-home/shared/scripts/kimi-review.sh"
+original_runner="$runner"
+runner="$copied_wrapper"
+(cd "$repo_a" && XDG_DATA_HOME="$tmp/xdg-data" run_review "$repo_a" installed-runner) ||
+  fail 'installed shared Kimi runner was not found outside the source tree'
+runner="$original_runner"
 
 printf 'codex review session checks passed\n'

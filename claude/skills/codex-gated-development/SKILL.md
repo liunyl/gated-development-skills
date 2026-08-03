@@ -11,13 +11,14 @@ Route by concrete risk, not diff size. Skip external review for local,
 reversible, single-path work with an obvious implementation and a direct
 check.
 
-For triggered work, use Codex as the sole mandatory external gate. Use Kimi
-only as an optional specialist second opinion for concurrency, idempotency,
-database transactions, tenant isolation, or distributed-state risks. The Kimi
-reviewer runs with a read-only tool allowlist and must not call Claude, Codex,
-another external model, or another review-gate workflow.
-Kimi availability, quota, transport failure, a hang, or a missing verdict never blocks the Codex gate.
-Never ignore a valid Kimi finding merely because Kimi is optional.
+For triggered work, Codex is always selected. Select Kimi as an additional
+specialist reviewer only for concurrency, idempotency, database transactions,
+tenant isolation, or distributed-state risks. Reviewer selection is
+discretionary, but completion is not: once Kimi is selected, wait for both
+reviewers and require both to return `VERDICT: PASS`. Kimi may use built-in
+subagents, but must not call Claude, Codex, another external model, or another
+review-gate workflow. Kimi failure, quota exhaustion, invalid output,
+`NEEDS REVISION`, or timeout blocks that gate round.
 
 Both reviewers run against repositories you already trust enough to build and
 execute locally; the gate reviews changes, it does not make an untrusted
@@ -43,7 +44,7 @@ RUNNER="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/codex-gated-development/scrip
   --focus "Re-check prior findings and review the committed fixes."
 ```
 
-Add one narrow Kimi pass only for the specialist risks above:
+Select one narrow Kimi pass only for the specialist risks above:
 
 ```bash
 "$RUNNER" code --session-key <task-key> --base <commit-before-task> \
@@ -55,17 +56,20 @@ Add one narrow Kimi pass only for the specialist risks above:
 
 The default command invokes only Codex. Repeat `--kimi-risk` for
 `concurrency`, `idempotency`, `database-transactions`, `tenant-isolation`, or
-`distributed-state`. This runs a fresh Kimi review concurrently against the
-full task snapshot. Codex reviews headlessly in a read-only sandbox from a
+`distributed-state`. The shared Kimi runner executes concurrently against a
+detached snapshot, reuses an explicit Kimi session when a task key is
+available, and uses a verified checkpoint for later `--since` rounds. Codex
+reviews headlessly in a read-only sandbox from a
 neutral working root, with user config, rules, hooks, plugins, apps, and MCP
-servers disabled for the run. Kimi is pinned to a `Read`/`Grep`/`Glob` tool
-allowlist and cannot read or write the live worktree; it sees a detached
-snapshot. Any detected repository mutation fails the command.
+servers disabled for the run. Kimi may use `Agent` and `AgentSwarm`, but
+cannot read or write the live worktree. Any detected repository mutation
+fails the command.
 
 Each completed report must end with `VERDICT: PASS` or
-`VERDICT: NEEDS REVISION`. Codex failure, missing output, or an invalid
-verdict blocks the gate. Optional Kimi failures and timeouts produce warnings
-only.
+`VERDICT: NEEDS REVISION`. Every selected reviewer must return `PASS`;
+failure, missing output, an invalid verdict, `NEEDS REVISION`, or timeout
+blocks the gate. Valid `NEEDS REVISION` reports still establish review
+checkpoints so committed fixes can use an incremental rerun.
 
 Persistent review sessions are keyed by `--session-key`, or by
 `CODEX_REVIEW_SESSION_KEY` / `CLAUDE_CODE_SESSION_ID` as fallbacks for ad-hoc
@@ -118,8 +122,8 @@ count.
 
 When the task contains a Kimi specialist risk, add the matching `--kimi-risk`
 values at the relevant planning or final gate. Do not request a broad second
-review. If Kimi returns a valid blocking finding, fix it and re-check that
-risk; if Kimi cannot complete, continue using Codex as the gate.
+review. Fix valid findings and rerun the same selected reviewer set; do not
+continue past a failed, incomplete, or timed-out Kimi round.
 
 ## Triage and convergence
 
@@ -132,9 +136,9 @@ Use `/receiving-code-review` to classify every finding:
 - Escalate ambiguity or conflict with a user decision.
 
 Separate blocking defects from residual style, alternatives, and speculative
-hardening. Clear the gate only when the newest Codex review sees the final
-state and has no valid unaddressed blocker. Any later artifact mutation
-reopens the Codex gate. Convergence must be monotone: if the blocking set is
+hardening. Clear the gate only when every reviewer selected for the newest
+round sees the final state and returns `PASS`. Any later artifact mutation
+reopens the gate. Convergence must be monotone: if the blocking set is
 not shrinking after about three rounds, or a fix keeps reintroducing
 findings, stop looping and escalate to the human with the current state.
 
@@ -158,8 +162,8 @@ evidence-only rebuttal or after rewritten history.
 | Excuse | Reality |
 |---|---|
 | “Codex passed earlier.” | A later mutation is unreviewed; rerun Codex or revert it. |
-| “Kimi failed, so delivery is blocked.” | Kimi is advisory; Codex alone owns the gate. |
-| “Kimi is optional, so ignore its bug.” | Optional sourcing does not make valid evidence optional. |
+| “Kimi was selected, but Codex passed.” | Selection is optional; a selected reviewer is mandatory and must return `PASS`. |
+| “Kimi timed out, so omit it from this round.” | Keep the selected reviewer set stable; timeout fails the round. |
 | “It is one line.” | Small financial, security, and concurrency changes can carry maximal risk. |
 | “It is only a doc edit.” | Operative Markdown is the runtime surface here; risk triggers override artifact type. |
 | “Run the backtest first.” | A causal bug can manufacture the result and bias later review. |
@@ -168,10 +172,10 @@ evidence-only rebuttal or after rewritten history.
 
 - Mandatory planning gate: `codex-review.sh adversarial`.
 - Mandatory final gate: `codex-review.sh code`.
-- Optional specialist review: add one or more supported `--kimi-risk` values.
-- Kimi is tool-restricted to `Read`/`Grep`/`Glob`, may not chain external
-  review gates, and is operationally non-blocking (bounded grace, then
-  termination with a warning).
+- Conditionally mandatory specialist review: add one or more supported
+  `--kimi-risk` values.
+- Once selected, Kimi may use built-in subagents, may not chain external
+  review gates, and must complete with `PASS`.
 - Full task scope: add `--base <commit-before-task>`.
 - Incremental fix scope: add `--since <previous-reviewed-head>`.
 - One `--session-key` per task; a fresh key means a fresh full review.

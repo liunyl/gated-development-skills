@@ -2,20 +2,21 @@
 
 ## System context
 
-This repository distributes three runtime-specific review gates and two shared
-engineering workflow skills. Runtime-specific policies remain under `claude/`,
-`codex/`, and `kimi/`; the tool-neutral bootstrap and PR-finishing workflows
-live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
+This repository distributes three runtime-specific review gates, one shared
+Kimi review runner, and two shared engineering workflow skills. Runtime-specific
+policies remain under `claude/`, `codex/`, and `kimi/`; shared runtime code and
+tool-neutral workflows live under `shared/`. (`claude/skills/codex-gated-development/`,
 `codex/skills/claude-gated-development/`,
-`kimi/skills/kimi-gated-development/`, `shared/skills/bootstrap-project/`,
-`shared/skills/finish-pr/`)
+`kimi/skills/kimi-gated-development/`, `shared/scripts/kimi-review.sh`,
+`shared/skills/bootstrap-project/`, `shared/skills/finish-pr/`)
 
 ## Components
 
 | Component | Responsibility | Repository source |
 |---|---|---|
-| Claude Code gate | Routes complex or high-risk work through a mandatory Codex review in one persistent per-task session (`codex exec resume`), with optional tool-restricted Kimi review for named state-consistency risks. Kimi receives a detached snapshot through macOS `sandbox-exec` or Linux Bubblewrap under a `Read`/`Grep`/`Glob` agent-profile allowlist. | `claude/skills/codex-gated-development/SKILL.md`; `claude/skills/codex-gated-development/scripts/codex-review.sh` |
-| Codex gate | Routes complex or high-risk work through a mandatory Claude review, with optional targeted Kimi review for named state-consistency risks. Kimi receives a detached snapshot through macOS `sandbox-exec` or Linux Bubblewrap. | `codex/skills/claude-gated-development/SKILL.md`; `codex/skills/claude-gated-development/scripts/claude-review.sh` |
+| Claude Code gate | Routes complex or high-risk work through a mandatory Codex review in one persistent per-task session (`codex exec resume`) and may select the shared Kimi reviewer for named state-consistency risks. Every selected reviewer must return `PASS`. | `claude/skills/codex-gated-development/SKILL.md`; `claude/skills/codex-gated-development/scripts/codex-review.sh` |
+| Codex gate | Routes complex or high-risk work through a mandatory Claude review and may select the shared Kimi reviewer for named state-consistency risks. Every selected reviewer must return `PASS`. | `codex/skills/claude-gated-development/SKILL.md`; `codex/skills/claude-gated-development/scripts/claude-review.sh` |
+| Shared Kimi runner | Owns the disposable detached snapshot, keyed sandbox-hidden session/checkpoint state, isolated Kimi runtime, native sandbox, progress/heartbeat output, timeout, and verdict exit semantics used by both routed gates. | `shared/scripts/kimi-review.sh` |
 | Kimi Code gate | Uses a judgment-based threshold and persistent Claude and Codex reviewer sessions. | `kimi/skills/kimi-gated-development/SKILL.md`; `kimi/skills/kimi-gated-development/scripts/` |
 | `bootstrap-project` | Builds an evidence-backed module map and settles the architecture taxonomy before prose, while allowing a repository with at most one durable module to keep readable detail in one overview and preserving an existing equivalent current-architecture hierarchy. | `shared/skills/bootstrap-project/SKILL.md`; `shared/skills/bootstrap-project/assets/`; `shared/skills/bootstrap-project/scripts/update-managed-block.sh` |
 | `finish-pr` | Audits the complete proposed diff, drafts commit and PR content, and hands branch lifecycle work to an established finishing workflow. | `shared/skills/finish-pr/SKILL.md` |
@@ -23,7 +24,8 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
 ## Primary flow
 
 1. Install each runtime-specific gate in its matching runtime skill directory,
-   then copy both shared skill folders unchanged to all three runtimes.
+   install the shared Kimi runner once under the user's data directory, then
+   copy both shared skill folders unchanged to all three runtimes.
    (`README.md`)
 2. Invoke `bootstrap-project` when a repository needs the shared instruction,
    architecture, and PR-template baseline. It records an evidence-backed
@@ -36,12 +38,17 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
    comments and architecture documentation current under the managed
    engineering standards. Both routed gates perform a full first external
    review per mode, then can use a verified commit checkpoint for later
-   incremental rounds in the same persistent reviewer session. Optional Kimi
-   review is selected by named risk and always receives a fresh full
-   snapshot. (`claude/skills/codex-gated-development/SKILL.md`;
+   incremental rounds in the same persistent reviewer session. Kimi may be
+   selected by named risk; once selected, the gate waits for it and requires
+   `PASS`. With a task/session key, its shared runner independently resumes an
+   explicit Kimi session and activates incremental scope only from a matching
+   verified checkpoint; keyless rounds always start full. It scrubs the
+   detached repository snapshot after each round.
+   (`claude/skills/codex-gated-development/SKILL.md`;
    `claude/skills/codex-gated-development/scripts/codex-review.sh`;
    `codex/skills/claude-gated-development/SKILL.md`;
    `codex/skills/claude-gated-development/scripts/claude-review.sh`;
+   `shared/scripts/kimi-review.sh`;
    `kimi/skills/kimi-gated-development/SKILL.md`;
    `shared/skills/bootstrap-project/assets/project-instructions.md`)
 4. After implementation, invoke `finish-pr` to audit evidence and draft the
@@ -74,19 +81,22 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
   and `docs/superpowers/` preserve historical change context.
   (`docs/README.md`; `shared/skills/bootstrap-project/SKILL.md`)
 - Gate checkpoints are scoped by repository, task session key, and review
-  mode in both wrapper scripts. Each `<session-file>.<mode>.reviewed` record
-  stores the resolved task base and the reviewed `HEAD`; the Claude-side
-  wrapper additionally stores and verifies the Codex session id, so a
-  checkpoint is honored only by the session that produced it. A later
-  `--since` request uses `incremental-review-scope.txt` only when the
-  reviewer session and checkpoint are trustworthy. Otherwise the reviewer
-  receives the full task bundle, while dirty or invalid commit ranges fail
-  closed. Optional Kimi review has no checkpoint and always receives the full
-  task. Checkpoints advance after a valid `PASS` or `NEEDS REVISION` report
-  regardless of Kimi availability; a skipped or malformed mandatory review
-  cannot establish incremental scope.
+  mode. Each primary wrapper records the resolved task base and reviewed
+  `HEAD`; the Claude-side wrapper additionally binds the Codex session id.
+  With a task/session key, the shared Kimi runner separately stores an explicit
+  Kimi session id and a per-mode checkpoint bound to that session under the
+  sandbox-hidden `kimi-review-state/` root. A later `--since` request uses
+  the incremental bundle only for reviewers whose session and checkpoint are
+  trustworthy; another reviewer may independently fall back to the full task.
+  Dirty `--since` requests or invalid commit ranges fail before reviewers
+  start. The Kimi repository fingerprint must remain stable through snapshot
+  preparation and review before its session or checkpoint advances. Valid
+  `PASS` or `NEEDS REVISION` reports advance that reviewer's checkpoint, while
+  only `PASS` clears the gate and skipped or malformed output establishes no
+  state.
   (`claude/skills/codex-gated-development/scripts/codex-review.sh`;
-  `codex/skills/claude-gated-development/scripts/claude-review.sh`)
+  `codex/skills/claude-gated-development/scripts/claude-review.sh`;
+  `shared/scripts/kimi-review.sh`)
 - Claude-side rounds sharing a session key are serialized by a `mkdir` lock
   that fails loudly on overlap and is never removed silently, and the Codex
   reviewer executes from a neutral working root outside the repository with
@@ -94,27 +104,31 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
   reviewed repository can never configure its own reviewer, and
   `mcp_servers={}` alone is insufficient because TOML table overrides merge.
   (`claude/skills/codex-gated-development/scripts/codex-review.sh`)
-- Reviewer recursion is blocked at the external-gate boundary: Claude cannot
+- Reviewer chaining is prohibited at the external-gate boundary: Claude cannot
   load `codex-gated-development`, the Codex reviewer is instructed not to
   invoke gate skills, wrapper scripts, or other agent CLIs inside its
-  read-only sandbox, and optional Kimi receives an empty skill directory and
-  instructions not to invoke Claude, Codex, CodeSearch, another external
-  model, or another review gate. On the Codex side Kimi keeps
-  `Agent`/`AgentSwarm` subagents; on the Claude side Kimi is pinned by an
-  agent profile to `Read`, `Grep`, and `Glob` only (enabled through the v2
-  engine flag `KIMI_CODE_EXPERIMENTAL_FLAG=1`; a Kimi that rejects the
-  profile fails visibly and non-blockingly).
+  read-only sandbox, and selected Kimi receives an empty skill directory plus
+  the same no-chaining instruction from both routed gates. Kimi retains Bash
+  and built-in `Agent`/`AgentSwarm` inside its disposable snapshot, so its
+  no-chaining rule is contractual; the native sandbox separately prevents it
+  from reading gate state or modifying the host outside its detached workspace
+  and isolated Kimi runtime.
   (`claude/skills/codex-gated-development/scripts/codex-review.sh`;
-  `codex/skills/claude-gated-development/scripts/claude-review.sh`)
-- Optional Kimi execution fails closed when the platform sandbox is unavailable.
-  macOS denies live repository and Git paths with `sandbox-exec`; Linux masks
-  them with read-only temporary filesystems inside Bubblewrap and uses a private
-  PID namespace and `/proc` mount to prevent host-root path bypasses. Both
-  wrappers bound a still-running Kimi after the mandatory verdict
-  (`KIMI_REVIEW_GRACE_SECONDS`, then process-group termination with a
-  warning) so a hung optional reviewer cannot block the mandatory gate.
-  (`claude/skills/codex-gated-development/scripts/codex-review.sh`;
-  `codex/skills/claude-gated-development/scripts/claude-review.sh`; `README.md`)
+  `codex/skills/claude-gated-development/scripts/claude-review.sh`;
+  `shared/scripts/kimi-review.sh`)
+- Selected Kimi execution fails closed when the platform sandbox is unavailable.
+  macOS denies host writes by default and hides live repository, Git, and
+  gate-state reads with `sandbox-exec`; Linux mounts the host read-only, masks
+  those protected paths, and uses a private PID namespace and `/proc` mount to
+  prevent host-root path bypasses. Both platforms allow writes only to the
+  detached workspace and an isolated `KIMI_CODE_HOME`
+  partitioned by the source Kimi profile and containing review-only
+  credentials, sessions, and logs. The shared runner
+  forwards Kimi's native progress, emits periodic `ACTIVE`/`IDLE` heartbeats,
+  scrubs each repository
+  snapshot on exit, and terminates the Kimi process group after
+  `KIMI_REVIEW_TIMEOUT_SECONDS` (default 1800); timeout blocks the gate.
+  (`shared/scripts/kimi-review.sh`; `README.md`)
 - The dependency-free engineering infrastructure test exercises shared assets,
   managed-block behavior, dogfood files, and installation documentation.
   (`tests/test-engineering-infrastructure.sh`)
@@ -125,6 +139,7 @@ live under `shared/skills/`. (`claude/skills/codex-gated-development/`,
 |---|---|
 | Claude Code review gate and Codex-session runner | `claude/skills/codex-gated-development/`; `claude/skills/codex-gated-development/scripts/codex-review.sh` |
 | Codex review gate | `codex/skills/claude-gated-development/` |
+| Shared Kimi review runner | `shared/scripts/kimi-review.sh` |
 | Kimi Code review gate | `kimi/skills/kimi-gated-development/` |
 | Repository bootstrap workflow and managed assets | `shared/skills/bootstrap-project/` |
 | Final PR audit and drafting workflow | `shared/skills/finish-pr/` |

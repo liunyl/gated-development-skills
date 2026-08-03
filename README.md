@@ -3,8 +3,8 @@
 Gate skills for Claude Code, Codex CLI, and Kimi Code. Both routed gates are
 risk-routed rather than size-routed: local, reversible, single-path work with
 a direct check skips external review, while concrete complex or high-risk
-work uses the opposite runtime's model as the sole mandatory external gate
-for planning and final reviews. Risk triggers override artifact type —
+work always selects the opposite runtime's model for planning and final
+reviews. Risk triggers override artifact type —
 operative Markdown (skills, reviewer prompts, policy) gates like code. Real
 quant backtests remain gated before their first run.
 
@@ -13,24 +13,27 @@ committed, later rounds in the same persistent reviewer session can use
 `--since <previous-reviewed-head>` to send only the new commit range plus a
 full-task summary. On the Claude side the Codex reviewer session is resumed
 with `codex exec resume`, checkpoints additionally bind the reviewing session
-id, and a per-key lock serializes rounds. Optional Kimi review is limited to
-named concurrency, idempotency, transaction, tenant-isolation, and
-distributed-state risks; it always sees a fresh full snapshot through a
-native sandbox and never blocks the mandatory gate — Kimi quota, transport
-failure, or a hang degrades to a warning, and both runners terminate a hung
-Kimi after a bounded grace (`KIMI_REVIEW_GRACE_SECONDS`, default 1800). On the
-Claude side Kimi additionally runs under an agent profile whose tool
-allowlist is exactly `Read`, `Grep`, and `Glob`; on the Codex side it may use
-built-in subagents. Kimi may not chain to another external reviewer or
-review gate.
+id, and a per-key lock serializes rounds. Kimi selection is limited to named
+concurrency, idempotency, transaction, tenant-isolation, and distributed-state
+risks. Both gates call the same shared Kimi runner, which maintains an explicit
+session and verified checkpoint when a task/session key is available, streams
+native progress plus heartbeats, and reviews a detached snapshot through a
+native sandbox. Keyless reviews always start full without reusable continuity.
+The snapshot is scrubbed after every round; only the stable working-directory
+shell, isolated Kimi runtime, and small session/checkpoint files persist. Kimi
+selection is optional; once selected, failure, `NEEDS REVISION`, invalid
+output, or the bounded timeout (`KIMI_REVIEW_TIMEOUT_SECONDS`, default 1800)
+blocks the gate. Kimi may use built-in subagents but may not chain to another
+external reviewer or review gate. The sandbox makes the host read-only to Kimi
+except for its detached workspace and isolated Kimi runtime.
 
 Both gates review changes in repositories you already trust enough to build
 and run locally; they do not make an untrusted repository safe to work in.
 
 | Skill | Lives in | Purpose |
 |-------|----------|---------|
-| `codex-gated-development` | Claude Code — `~/.claude/skills/` | Claude side: risk-routed gate; Codex reviews in one persistent session per task (`--session-key`), with optional tool-restricted Kimi specialist review |
-| `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: gate complex/high-risk work with Claude; optionally target Kimi at named state-consistency risks |
+| `codex-gated-development` | Claude Code — `~/.claude/skills/` | Claude side: risk-routed Codex gate with conditionally mandatory Kimi specialist review |
+| `claude-gated-development` | Codex CLI — `~/.codex/skills/` | Codex side: risk-routed Claude gate with conditionally mandatory Kimi specialist review |
 | `kimi-gated-development` | Kimi Code — `~/.kimi-code/skills/` | Kimi side: judgment-triggered dual gate — Claude and Codex review in parallel, each reusing one persistent session per task across all review rounds |
 
 The tool-neutral engineering skills install unchanged in every runtime:
@@ -51,13 +54,17 @@ cp -R claude/skills/codex-gated-development ~/.claude/skills/
 cp -R codex/skills/claude-gated-development ~/.codex/skills/
 cp -R kimi/skills/kimi-gated-development ~/.kimi-code/skills/
 
+shared_runtime_dir="${XDG_DATA_HOME:-$HOME/.local/share}/gated-development-skills"
+mkdir -p "$shared_runtime_dir"
+install -m 0755 shared/scripts/kimi-review.sh "$shared_runtime_dir/kimi-review.sh"
+
 for runtime in .claude .codex .kimi-code; do
   mkdir -p "$HOME/$runtime/skills"
   cp -R shared/skills/bootstrap-project shared/skills/finish-pr "$HOME/$runtime/skills/"
 done
 ```
 
-Optional Kimi reviews use the native sandbox: `sandbox-exec` on macOS or
+Selected Kimi reviews use the native sandbox: `sandbox-exec` on macOS or
 Bubblewrap on Linux. Ubuntu installs Bubblewrap with:
 
 ```bash
@@ -85,10 +92,16 @@ neutral working root with user config, rules, hooks, plugins, apps, and MCP
 servers disabled, so no configuration layer of the reviewed repository or
 user profile reaches the gate. The `openai-codex` Claude Code plugin is not
 required for the gate; rescue and stop-hook flows keep using the plugin
-independently. Optional Kimi review needs the `kimi` CLI (tested with Kimi
-0.29.0, whose v2 engine honors the runner's read-only agent profile via
-`KIMI_CODE_EXPERIMENTAL_FLAG=1`; a Kimi that rejects it degrades to a
-warning, never an unrestricted run).
+independently. Selected Kimi review needs an installed and authenticated
+`kimi` CLI plus the shared runner installed above. The runner uses Kimi's
+explicit session ID, native prompt-mode progress, built-in subagents, and an
+empty skills directory; it never silently degrades a selected Kimi review.
+With a task/session key, its small continuity records live under
+`${XDG_CACHE_HOME:-~/.cache}/gated-development-skills/kimi-review-state/`.
+Without a key, the review has no reusable session or checkpoint. Kimi's own
+review-only config, credentials, sessions, and logs are isolated under the
+adjacent `kimi-review-runtime/` directory, partitioned by source
+`KIMI_CODE_HOME` profile.
 
 `kimi-gated-development` needs both the `claude` and `codex` CLIs installed
 and authenticated; its reviewers are review-only (read-only tool surface /

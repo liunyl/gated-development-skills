@@ -9,7 +9,7 @@ description: Use when engineering or quant work crosses module or integration bo
 
 Route by concrete risk, not diff size. Skip external review for local, reversible, single-path work with an obvious implementation and direct check.
 
-For triggered work, use Claude as the sole mandatory external gate. Use Kimi only as an optional specialist second opinion for concurrency, idempotency, database transactions, tenant isolation, or distributed-state risks. Kimi may use its built-in subagents, but must not call Claude, Codex, CodeSearch, another external model, or another review-gate workflow. Kimi availability, quota, transport failure, a hang, or a missing verdict never blocks the Claude gate; a Kimi round still running after the Claude verdict is terminated after a bounded grace with a warning. Never ignore a valid Kimi finding merely because Kimi is optional.
+For triggered work, Claude is always selected. Select Kimi as an additional specialist reviewer only for concurrency, idempotency, database transactions, tenant isolation, or distributed-state risks. Reviewer selection is discretionary, but completion is not: once Kimi is selected, wait for both reviewers and require both to return `VERDICT: PASS`. Kimi may use its built-in subagents, but must not call Claude, Codex, CodeSearch, another external model, or another review-gate workflow. Kimi failure, quota exhaustion, invalid output, `NEEDS REVISION`, or timeout blocks that gate round.
 
 For a real quant strategy, review the playbook and backtest code before the first real run.
 
@@ -26,7 +26,7 @@ RUNNER="${CODEX_HOME:-$HOME/.codex}/skills/claude-gated-development/scripts/clau
   --focus "Re-check prior findings and review the committed fixes."
 ```
 
-Add one narrow Kimi pass only for the specialist risks above:
+Select one narrow Kimi pass only for the specialist risks above:
 
 ```bash
 "$RUNNER" code --base <commit-before-task> \
@@ -36,9 +36,9 @@ Add one narrow Kimi pass only for the specialist risks above:
   --kimi-risk tenant-isolation
 ```
 
-The default command invokes only Claude. Repeat `--kimi-risk` for `concurrency`, `idempotency`, `database-transactions`, `tenant-isolation`, or `distributed-state`. This runs a fresh Kimi review concurrently against the full task snapshot. Kimi may use `Agent` and `AgentSwarm` internally; an empty skill directory and the review prompt prohibit chaining to external reviewers or review gates. Claude reviews through a read-only tool surface; Kimi cannot read or write the live worktree. Any detected repository mutation fails the command.
+The default command invokes only Claude. Repeat `--kimi-risk` for `concurrency`, `idempotency`, `database-transactions`, `tenant-isolation`, or `distributed-state`. The shared Kimi runner executes concurrently against a detached snapshot, reuses an explicit Kimi session when a task key is available, and uses a verified checkpoint for later `--since` rounds. Kimi may use `Agent` and `AgentSwarm` internally; an empty skill directory and the review prompt prohibit chaining to external reviewers or review gates. Claude reviews through a read-only tool surface; Kimi cannot read or write the live worktree. Any detected repository mutation fails the command.
 
-Each completed report must end with `VERDICT: PASS` or `VERDICT: NEEDS REVISION`. Claude failure, missing output, or an invalid verdict blocks the gate. Optional Kimi failures produce warnings only.
+Each completed report must end with `VERDICT: PASS` or `VERDICT: NEEDS REVISION`. Every selected reviewer must return `PASS`; failure, missing output, an invalid verdict, `NEEDS REVISION`, or timeout blocks the gate. Valid `NEEDS REVISION` reports still establish review checkpoints so committed fixes can use an incremental rerun.
 
 Persistent review sessions are keyed by `CODEX_THREAD_ID`, or explicitly by `--session-key`. A first review is full-scope; later committed fixes may use `--since`.
 
@@ -52,7 +52,14 @@ Require the Claude gate for any of these triggers:
 - Financial or quant logic, including a real strategy backtest.
 - Failure modes that are hard to verify locally.
 
-Diff size is not a trigger by itself. Tiny changes to cost, slippage, sizing, fills, signal timing, offsets, look-ahead, timezone, polarity, data selection, or rolling windows remain gated because their risk is financial. Typos, comments, and pure prose edits skip the gate.
+Risk triggers override artifact type. Operative Markdown — skill definitions,
+reviewer prompts, policy documents, and agent configuration — is gated like
+code when a trigger applies: prose can be the runtime surface. Diff size is
+not a trigger by itself. Tiny changes to cost, slippage, sizing, fills, signal
+timing, offsets, look-ahead, timezone, polarity, data selection, or rolling
+windows remain gated because their risk is financial. The prose exemption
+covers only non-operative documentation: typos, comments, and prose no runtime
+or reviewer behavior depends on.
 
 ## Review the real scope
 
@@ -72,7 +79,7 @@ Write plans, specs, and playbooks to files before review. Untracked files count.
 6. Run one Claude `code` gate on the complete final diff.
 7. Finish the branch only after the latest Claude turn clears the final state.
 
-When the task contains a Kimi specialist risk, add the matching `--kimi-risk` values at the relevant planning or final gate. Do not request a broad second review. If Kimi returns a valid blocking finding, fix it and re-check that risk; if Kimi cannot complete, continue using Claude as the gate.
+When the task contains a Kimi specialist risk and Kimi is selected, add the matching `--kimi-risk` values at the relevant planning or final gate. Do not request a broad second review. Fix valid findings and rerun the same selected reviewer set; do not continue past a failed, incomplete, or timed-out Kimi round.
 
 ## Triage and convergence
 
@@ -82,7 +89,7 @@ Use `superpowers:receiving-code-review` to classify every finding:
 - Record technical evidence for wrong, duplicate, YAGNI, or inapplicable findings.
 - Escalate ambiguity or conflict with a user decision.
 
-Separate blocking defects from residual style, alternatives, and speculative hardening. Clear the gate only when the newest Claude review sees the final state and has no valid unaddressed blocker. Any later artifact mutation reopens the Claude gate.
+Separate blocking defects from residual style, alternatives, and speculative hardening. Clear the gate only when every reviewer selected for the newest round sees the final state and returns `PASS`. Any later artifact mutation reopens the gate.
 
 For incremental reruns, save the reviewed commit, commit the fixes, then use the same task base, session key, mode, and `--since`. Omit `--since` for an evidence-only rebuttal or after rewritten history.
 
@@ -99,8 +106,8 @@ For incremental reruns, save the reviewed commit, commit the fixes, then use the
 | Excuse | Reality |
 |---|---|
 | “Claude passed earlier.” | A later mutation is unreviewed; rerun Claude or revert it. |
-| “Kimi failed, so delivery is blocked.” | Kimi is advisory; Claude alone owns the gate. |
-| “Kimi is optional, so ignore its bug.” | Optional sourcing does not make valid evidence optional. |
+| “Kimi was selected, but Claude passed.” | Selection is optional; a selected reviewer is mandatory and must return `PASS`. |
+| “Kimi timed out, so omit it from this round.” | Keep the selected reviewer set stable; timeout fails the round. |
 | “It is one line.” | Small financial, security, and concurrency changes can carry maximal risk. |
 | “Run the backtest first.” | A causal bug can manufacture the result and bias later review. |
 
@@ -108,8 +115,8 @@ For incremental reruns, save the reviewed commit, commit the fixes, then use the
 
 - Mandatory planning gate: `claude-review.sh adversarial`.
 - Mandatory final gate: `claude-review.sh code`.
-- Optional specialist review: add one or more supported `--kimi-risk` values.
-- Kimi may delegate internally, must not chain external review gates, and is operationally non-blocking.
+- Conditionally mandatory specialist review: add one or more supported `--kimi-risk` values.
+- Once selected, Kimi may delegate internally, must not chain external review gates, and must complete with `PASS`.
 - Codex simplification pass: `code-simplifier:code-simplifier`.
 - Codex self-review: `pr-review-toolkit:review-pr`.
 - Full task scope: add `--base <commit-before-task>`.
