@@ -501,7 +501,6 @@ CODEX_GATE="$ROOT/codex/skills/claude-gated-development/SKILL.md"
 CODEX_GATE_RUNNER="$ROOT/codex/skills/claude-gated-development/scripts/claude-review.sh"
 CLAUDE_GATE="$ROOT/claude/skills/codex-gated-development/SKILL.md"
 CLAUDE_GATE_RUNNER="$ROOT/claude/skills/codex-gated-development/scripts/codex-review.sh"
-KIMI_RUNNER="$ROOT/shared/scripts/kimi-review.sh"
 test -f "$FINISH/SKILL.md"
 grep -Fq 'name: finish-pr' "$FINISH/SKILL.md"
 grep -Fq 'type(scope): imperative summary' "$FINISH/SKILL.md"
@@ -513,8 +512,6 @@ grep -Fq 'Finish: use `finish-pr`, then `/finishing-a-development-branch`' \
   "$CLAUDE_GATE"
 grep -Fq 'Finish: use `finish-pr`, then `superpowers:finishing-a-development-branch`' \
   "$CODEX_GATE"
-grep -Eq '^\| Finish handoff \| After the final code gate clears \| Use `finish-pr`.*before.*branch-finishing workflow\. \|$' \
-  "$ROOT/kimi/skills/kimi-gated-development/SKILL.md"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$FINISH/SKILL.md"; then
   printf '%s\n' 'finish-pr contains agent-specific commands' >&2
   exit 1
@@ -567,48 +564,47 @@ cmp "$TMP/claude-managed.md" "$BLOCK"
 grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$AGENTS"
 grep -Fq 'sh tests/test-engineering-infrastructure.sh' "$CLAUDE"
 
-grep -Fq 'Reviewer selection is discretionary, but completion is not' "$CODEX_GATE"
-grep -Fq 'Kimi failure, quota exhaustion, invalid output, `NEEDS REVISION`, or timeout blocks' \
-  "$CODEX_GATE"
-grep -Fq -- '--kimi-risk concurrency' "$CODEX_GATE"
+grep -Fq 'For triggered work, Claude is mandatory and must return `VERDICT: PASS`.' "$CODEX_GATE"
 grep -Fq -- '--since <previous-reviewed-head>' "$CODEX_GATE"
 grep -Fq 'For incremental reruns, save the reviewed commit, commit the fixes' "$CODEX_GATE"
 grep -Fq 'Use `code-simplifier:code-simplifier` on the complete task diff' "$CODEX_GATE"
-grep -Fq 'Use `pr-review-toolkit:review-pr` on the complete task diff' "$CODEX_GATE"
-grep -Fq 'GATED_KIMI_REVIEW_RUNNER' "$CODEX_GATE_RUNNER"
+grep -Fq 'use upstream `code-review` with `<commit-before-task>` as the fixed point' "$CODEX_GATE"
+grep -Fq 'Require separate `Standards` and `Spec` axes' "$CODEX_GATE"
+grep -Fq 'from `mattpocock/skills` is the only general-purpose Codex reviewer' "$CODEX_GATE"
+grep -Fq 'stop and ask the user to run `/setup-matt-pocock-skills`' "$CODEX_GATE"
+test -x "$CODEX_GATE_RUNNER"
+test -x "$ROOT/codex/skills/claude-gated-development/scripts/test-claude-review-session.sh"
 
-grep -Fq 'Reviewer selection is' "$CLAUDE_GATE"
-grep -Fq 'completion is not' "$CLAUDE_GATE"
-grep -Fq 'Kimi failure, quota exhaustion, invalid output,' "$CLAUDE_GATE"
-grep -Fq -- '--kimi-risk concurrency' "$CLAUDE_GATE"
+MARKETPLACE="$ROOT/.agents/plugins/marketplace.json"
+test ! -e "$ROOT/codex/plugins/pr-review-toolkit"
+grep -Fq '"name": "code-simplifier"' "$MARKETPLACE"
+if grep -Fq '"name": "pr-review-toolkit"' "$MARKETPLACE"; then
+  printf '%s\n' 'retired pr-review-toolkit remains in the marketplace' >&2
+  exit 1
+fi
+grep -Fq 'npx skills add mattpocock/skills -g --skill code-review setup-matt-pocock-skills' "$ROOT/README.md"
+grep -Fq 'codex plugin remove pr-review-toolkit@gated-development-skills' "$ROOT/README.md"
+grep -Fq 'codex plugin add code-simplifier@gated-development-skills' "$ROOT/README.md"
+
+grep -Fq 'For triggered work, Codex is mandatory and must return `VERDICT: PASS`.' "$CLAUDE_GATE"
 grep -Fq -- '--since <previous-reviewed-head>' "$CLAUDE_GATE"
 grep -Fq 'For incremental reruns, save the reviewed commit, commit the fixes' "$CLAUDE_GATE"
 grep -Fq 'Risk triggers override artifact type' "$CLAUDE_GATE"
 grep -Fq 'Route by concrete risk, not diff size' "$CLAUDE_GATE"
 test -x "$CLAUDE_GATE_RUNNER"
 test -x "$ROOT/claude/skills/codex-gated-development/scripts/test-codex-review-session.sh"
-grep -Fq 'GATED_KIMI_REVIEW_RUNNER' "$CLAUDE_GATE_RUNNER"
 grep -Fq -- '--ignore-user-config' "$CLAUDE_GATE_RUNNER"
 grep -Fq 'End with exactly one machine-readable line: VERDICT: PASS' "$CLAUDE_GATE_RUNNER"
-test -x "$KIMI_RUNNER"
-grep -Fq 'KIMI_REVIEW_TIMEOUT_SECONDS' "$KIMI_RUNNER"
-grep -Fq 'KIMI_REVIEW_GRACE_SECONDS:-1800' "$KIMI_RUNNER"
-grep -Fq 'KIMI_REVIEW_HEARTBEAT_SECONDS' "$KIMI_RUNNER"
-grep -Fq '[Kimi] STARTED' "$KIMI_RUNNER"
-grep -Fq '[Kimi] COMPLETED' "$KIMI_RUNNER"
-grep -Fq 'kimi-review-state' "$KIMI_RUNNER"
-grep -Fq 'kimi-review-runtime' "$KIMI_RUNNER"
-grep -Fq 'rm -rf "$kimi_repo" "$skills_dir"' "$KIMI_RUNNER"
-grep -Fq 'deny file-write' "$KIMI_RUNNER"
-grep -Fq 'write_allows=("$workspace" "$kimi_runtime")' "$KIMI_RUNNER"
-grep -Fq '(literal "/dev/null")' "$KIMI_RUNNER"
-grep -Fq 'HOME="$kimi_runtime/home"' "$KIMI_RUNNER"
-grep -Fq 'KIMI_CODE_HOME="$kimi_runtime"' "$KIMI_RUNNER"
-grep -Fq -- '--ro-bind / /' "$KIMI_RUNNER"
-grep -Fq '"$events_file" | tail -n 1' "$KIMI_RUNNER"
-grep -Fq 'You may use built-in Agent and AgentSwarm subagents.' "$KIMI_RUNNER"
-grep -Fq 'Do not invoke external reviewers or review-gate workflows' "$KIMI_RUNNER"
-grep -Fq -- '--session "$kimi_session_id"' "$KIMI_RUNNER"
+
+test ! -e "$ROOT/kimi/skills/kimi-gated-development"
+test ! -e "$ROOT/shared/scripts/kimi-review.sh"
+for retired_token in '--kimi-risk' 'GATED_KIMI_REVIEW_RUNNER'; do
+  if grep -Fq -- "$retired_token" \
+    "$CODEX_GATE" "$CODEX_GATE_RUNNER" "$CLAUDE_GATE" "$CLAUDE_GATE_RUNNER"; then
+    printf '%s\n' "retired Kimi surface remains: $retired_token" >&2
+    exit 1
+  fi
+done
 
 test "$(grep -Fc '<!-- BEGIN bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
 test "$(grep -Fc '<!-- END bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
@@ -637,8 +633,8 @@ grep -Fq 'Source map' "$OVERVIEW"
 grep -Fq 'Source map' "$ARCHITECTURE_INDEX"
 grep -Fq 'incremental bundle' "$OVERVIEW"
 grep -Fq -- '--since <previous-reviewed-head>' "$ROOT/README.md"
-grep -Fq 'optional; once selected, failure' "$ROOT/README.md"
-grep -Fq 'shared/scripts/kimi-review.sh' "$ROOT/README.md"
+grep -Fq '~/.kimi-code/skills/kimi-gated-development/' "$ROOT/README.md"
+grep -Fq 'Old `--kimi-risk` wrapper invocations now fail as unknown arguments.' "$ROOT/README.md"
 if grep -Ern 'POSIX helper|POSIX shell script|POSIX-compatible shell checks' \
   "$ROOT/docs" "$BOOTSTRAP/SKILL.md" >"$TMP/posix-claims"; then
   cat "$TMP/posix-claims" >&2
@@ -648,8 +644,6 @@ grep -Fq 'standard macOS/Linux `mktemp`' "$BOOTSTRAP/SKILL.md"
 for source_path in \
   'claude/skills/codex-gated-development/' \
   'codex/skills/claude-gated-development/' \
-  'kimi/skills/kimi-gated-development/' \
-  'shared/scripts/kimi-review.sh' \
   'shared/skills/bootstrap-project/' \
   'shared/skills/finish-pr/' \
   'tests/test-engineering-infrastructure.sh'
@@ -661,6 +655,6 @@ grep -Fq 'bootstrap-project' "$ROOT/README.md"
 grep -Fq 'finish-pr' "$ROOT/README.md"
 grep -Fq '.claude/skills' "$ROOT/README.md"
 grep -Fq '.codex/skills' "$ROOT/README.md"
-grep -Fq '.kimi-code/skills' "$ROOT/README.md"
+grep -Fq 'for runtime in .claude .codex .kimi-code; do' "$ROOT/README.md"
 
 printf '%s\n' 'engineering infrastructure checks passed'

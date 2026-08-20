@@ -7,8 +7,8 @@ umask 077
 usage() {
   cat <<'EOF'
 Usage:
-  codex-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
-  codex-review.sh code [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
+  codex-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--session-key KEY]
+  codex-review.sh code [--base REF] [--since REF] [--focus TEXT] [--session-key KEY]
 
 Without --base, review staged, unstaged, and untracked working-tree changes.
 With --base, review REF...HEAD plus current working-tree changes.
@@ -17,17 +17,10 @@ review mode has a verified persistent checkpoint produced by the same Codex
 session; otherwise review the full task. Incremental review requires a clean
 working tree.
 
-Codex is always mandatory. Repeat --kimi-risk to select a concurrent Kimi
-review for: concurrency, idempotency, database-transactions, tenant-isolation,
-or distributed-state. Once selected, Kimi must complete with VERDICT: PASS;
-failure, NEEDS REVISION, invalid output, or KIMI_REVIEW_TIMEOUT_SECONDS
-(default 1800) blocks the gate.
-
 Session continuity: with --session-key (or CODEX_REVIEW_SESSION_KEY, or
 CLAUDE_CODE_SESSION_ID), one persistent Codex session per (repository, key) is
-reused across review rounds; distinct tasks must use distinct keys. Selected
-Kimi reviews keep an independent explicit session and checkpoint under the
-same key. Without any key both reviews run without reusable continuity.
+reused across review rounds; distinct tasks must use distinct keys. Without
+any key the review runs without reusable continuity.
 EOF
 }
 
@@ -52,7 +45,6 @@ esac
 base=""
 since=""
 focus=""
-kimi_risks=()
 session_key_arg=""
 while (($#)); do
   case "$1" in
@@ -65,15 +57,6 @@ while (($#)); do
     --focus)
       (($# >= 2)) || die_usage "--focus requires text"
       focus="$2"
-      shift 2
-      ;;
-    --kimi-risk)
-      (($# >= 2)) || die_usage "--kimi-risk requires a value"
-      case "$2" in
-        concurrency|idempotency|database-transactions|tenant-isolation|distributed-state) ;;
-        *) die_usage "unsupported Kimi risk: $2" ;;
-      esac
-      kimi_risks+=("$2")
       shift 2
       ;;
     --since)
@@ -98,27 +81,6 @@ done
 
 command -v git >/dev/null 2>&1 || die_usage "git is not installed"
 codex_bin="$(command -v codex 2>/dev/null)" || die_usage "codex CLI is not installed"
-review_with_kimi=0
-kimi_runner=""
-if ((${#kimi_risks[@]})); then
-  review_with_kimi=1
-  if [[ -n "${GATED_KIMI_REVIEW_RUNNER:-}" ]]; then
-    kimi_runner="$GATED_KIMI_REVIEW_RUNNER"
-  else
-    script_path="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
-    source_root="$(cd "$(dirname "$0")/../../../.." && pwd -P)"
-    source_wrapper="$source_root/claude/skills/codex-gated-development/scripts/codex-review.sh"
-    source_runner="$source_root/shared/scripts/kimi-review.sh"
-    installed_runner="${XDG_DATA_HOME:-${HOME:-}/.local/share}/gated-development-skills/kimi-review.sh"
-    if [[ "$script_path" == "$source_wrapper" && -x "$source_runner" ]]; then
-      kimi_runner="$source_runner"
-    else
-      kimi_runner="$installed_runner"
-    fi
-  fi
-  [[ -x "$kimi_runner" ]] || die_usage \
-    "selected Kimi review requires the shared runner at $kimi_runner"
-fi
 if [[ "$codex_bin" == /* ]]; then
   export PATH="$(dirname "$codex_bin"):$PATH"
 fi
@@ -127,8 +89,6 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die_usage "run insid
 repo_root="$(cd "$repo_root" && pwd -P)"
 git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
 git_common_dir="$(cd "$git_common_dir" && pwd -P)"
-git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-dir)"
-git_dir="$(cd "$git_dir" && pwd -P)"
 status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)"
 base_oid=""
 since_oid=""
@@ -180,24 +140,14 @@ fi
 review_tmp="$(mktemp -d "${TMPDIR:-/tmp}/codex-review.XXXXXX")" || die_usage "cannot create temporary review directory"
 lock_dir=""
 codex_pid=""
-kimi_pid=""
-# Reviewer process groups die before the lock is released or their tmpdir is
-# removed: an interrupted wrapper must not leave an orphaned reviewer sharing
-# the persistent session with the next round (the interleaving the lock
-# exists to prevent), so both reviewers launch under job control below.
+# The reviewer process group dies before the lock is released or its tmpdir is
+# removed: an interrupted wrapper must not leave an orphan sharing the
+# persistent session with the next round.
 cleanup() {
-  local pid alive=0
-  for pid in "$codex_pid" "$kimi_pid"; do
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      alive=1
-      kill -TERM -- "-$pid" 2>/dev/null || true
-    fi
-  done
-  if [[ "$alive" -eq 1 ]]; then
+  if [[ -n "$codex_pid" ]] && kill -0 "$codex_pid" 2>/dev/null; then
+    kill -TERM -- "-$codex_pid" 2>/dev/null || true
     sleep 2
-    for pid in "$codex_pid" "$kimi_pid"; do
-      [[ -z "$pid" ]] || kill -KILL -- "-$pid" 2>/dev/null || true
-    done
+    kill -KILL -- "-$codex_pid" 2>/dev/null || true
     wait 2>/dev/null || true
   fi
   rm -rf "$review_tmp"
@@ -345,7 +295,7 @@ repo_fingerprint() {
 build_codex_prompt() {
   local bundle="$1" scope_contract="$2"
   cat <<EOF
-You are the independent external reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. Your shell runs in a read-only sandbox from a neutral working directory outside the repository; use it only for read commands such as git -C $repo_root status, git -C $repo_root diff, grep, and cat. Do not invoke any gated-development skill (such as codex-gated-development or claude-gated-development), the review wrapper scripts, or another external agent CLI such as claude or kimi; you are the reviewer, not a delegator.
+You are the independent external reviewer in a gated development workflow. This is review-only: do not edit, write, delete, commit, or otherwise mutate repository files or state. Your shell runs in a read-only sandbox from a neutral working directory outside the repository; use it only for read commands such as git -C $repo_root status, git -C $repo_root diff, grep, and cat. Do not invoke any gated-development skill (such as codex-gated-development or claude-gated-development), the review wrapper scripts, or another external agent CLI such as claude; you are the reviewer, not a delegator.
 
 Repository: $repo_root
 Review mode: $mode
@@ -456,37 +406,13 @@ run_codex_review() {
   return "$codex_status"
 }
 
-kimi_runner_args=()
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  kimi_runner_args=(
-    --repo "$repo_root"
-    --mode "$mode"
-    --full-bundle "$full_review_bundle"
-    --head "$head_oid"
-    --focus "$focus"
-  )
-  [[ -z "$base_oid" ]] || kimi_runner_args+=(--base "$base_oid")
-  if [[ -n "$since_oid" ]]; then
-    kimi_runner_args+=(--since "$since_oid" --incremental-bundle "$incremental_review_bundle")
-  fi
-  [[ -z "$session_key" ]] || kimi_runner_args+=(--session-key "$session_key")
-  for risk in "${kimi_risks[@]}"; do
-    kimi_runner_args+=(--risk "$risk")
-  done
-fi
 codex_report="$review_tmp/codex-report.txt"
-kimi_report="$review_tmp/kimi-report.txt"
 
 set +e
-# Job control gives each reviewer its own process group so interruption cleanup
-# can terminate the primary reviewer and the shared Kimi runner independently.
+# Job control gives the reviewer its own process group for interruption cleanup.
 set -m
 run_codex_review > "$codex_report" 2>&1 &
 codex_pid=$!
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  "$kimi_runner" "${kimi_runner_args[@]}" > "$kimi_report" &
-  kimi_pid=$!
-fi
 set +m
 wait "$codex_pid"
 codex_status=$?
@@ -497,12 +423,6 @@ codex_pid=""
 if [[ -n "$session_file" && -s "$session_file" ]]; then
   IFS= read -r session_id < "$session_file" || true
 fi
-kimi_status=0
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  wait "$kimi_pid"
-  kimi_status=$?
-  kimi_pid=""
-fi
 set -e
 
 printf '=== Codex review ===\n'
@@ -510,10 +430,6 @@ if [[ -s "$codex_last_message" ]]; then
   cat "$codex_last_message"
 else
   cat "$codex_report"
-fi
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  printf '=== Kimi selected review ===\n'
-  cat "$kimi_report"
 fi
 
 after_fingerprint="$(repo_fingerprint)"
@@ -567,7 +483,4 @@ if [[ -n "$reviewed_state_file" && -n "$base_oid" && -z "$status" ]]; then
   fi
 fi
 
-if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -ne 0 ]]; then
-  exit "$kimi_status"
-fi
 [[ "$codex_verdict" == "PASS" ]] || exit 8

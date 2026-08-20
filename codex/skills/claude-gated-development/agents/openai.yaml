@@ -1,4 +1,4 @@
 interface:
   display_name: "Complexity-Routed Claude Review"
-  short_description: "Gate risky work with Claude; add focused Kimi when useful"
+  short_description: "Gate risky work with an independent Claude review"
   default_prompt: "Use $claude-gated-development to route and review this task according to its concrete risk."

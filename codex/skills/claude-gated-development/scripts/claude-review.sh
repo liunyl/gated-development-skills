@@ -7,8 +7,8 @@ umask 077
 usage() {
   cat <<'EOF'
 Usage:
-  claude-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
-  claude-review.sh code [--base REF] [--since REF] [--focus TEXT] [--kimi-risk RISK]... [--session-key KEY]
+  claude-review.sh adversarial [--base REF] [--since REF] [--focus TEXT] [--session-key KEY]
+  claude-review.sh code [--base REF] [--since REF] [--focus TEXT] [--session-key KEY]
 
 Without --base, review staged, unstaged, and untracked working-tree changes.
 With --base, review REF...HEAD plus current working-tree changes.
@@ -16,16 +16,9 @@ With --base and --since, review only committed changes since REF when the same
 review mode has a verified persistent checkpoint; otherwise review the full
 task. Incremental review requires a clean working tree.
 
-Claude is always mandatory. Repeat --kimi-risk to select a concurrent Kimi
-review for: concurrency, idempotency, database-transactions, tenant-isolation,
-or distributed-state. Once selected, Kimi must complete with VERDICT: PASS;
-failure, NEEDS REVISION, invalid output, or KIMI_REVIEW_TIMEOUT_SECONDS
-(default 1800) blocks the gate.
-
 Session continuity: with --session-key (or CLAUDE_REVIEW_SESSION_KEY, or
 CODEX_THREAD_ID), one persistent Claude session is reused across review rounds.
-Selected Kimi reviews keep an independent explicit session and checkpoint under
-the same key. Without any key both reviews run without reusable continuity.
+Without any key the review runs without reusable continuity.
 EOF
 }
 
@@ -50,7 +43,6 @@ esac
 base=""
 since=""
 focus=""
-kimi_risks=()
 session_key_arg=""
 while (($#)); do
   case "$1" in
@@ -63,15 +55,6 @@ while (($#)); do
     --focus)
       (($# >= 2)) || die_usage "--focus requires text"
       focus="$2"
-      shift 2
-      ;;
-    --kimi-risk)
-      (($# >= 2)) || die_usage "--kimi-risk requires a value"
-      case "$2" in
-        concurrency|idempotency|database-transactions|tenant-isolation|distributed-state) ;;
-        *) die_usage "unsupported Kimi risk: $2" ;;
-      esac
-      kimi_risks+=("$2")
       shift 2
       ;;
     --since)
@@ -96,27 +79,6 @@ done
 
 command -v git >/dev/null 2>&1 || die_usage "git is not installed"
 claude_bin="$(command -v claude 2>/dev/null)" || die_usage "claude CLI is not installed"
-review_with_kimi=0
-kimi_runner=""
-if ((${#kimi_risks[@]})); then
-  review_with_kimi=1
-  if [[ -n "${GATED_KIMI_REVIEW_RUNNER:-}" ]]; then
-    kimi_runner="$GATED_KIMI_REVIEW_RUNNER"
-  else
-    script_path="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
-    source_root="$(cd "$(dirname "$0")/../../../.." && pwd -P)"
-    source_wrapper="$source_root/codex/skills/claude-gated-development/scripts/claude-review.sh"
-    source_runner="$source_root/shared/scripts/kimi-review.sh"
-    installed_runner="${XDG_DATA_HOME:-${HOME:-}/.local/share}/gated-development-skills/kimi-review.sh"
-    if [[ "$script_path" == "$source_wrapper" && -x "$source_runner" ]]; then
-      kimi_runner="$source_runner"
-    else
-      kimi_runner="$installed_runner"
-    fi
-  fi
-  [[ -x "$kimi_runner" ]] || die_usage \
-    "selected Kimi review requires the shared runner at $kimi_runner"
-fi
 if [[ "$claude_bin" == /* ]]; then
   export PATH="$(dirname "$claude_bin"):$PATH"
 fi
@@ -125,8 +87,6 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die_usage "run insid
 repo_root="$(cd "$repo_root" && pwd -P)"
 git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
 git_common_dir="$(cd "$git_common_dir" && pwd -P)"
-git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-dir)"
-git_dir="$(cd "$git_dir" && pwd -P)"
 status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)"
 base_oid=""
 since_oid=""
@@ -177,24 +137,14 @@ fi
 
 review_tmp="$(mktemp -d "${TMPDIR:-/tmp}/claude-review.XXXXXX")" || die_usage "cannot create temporary review directory"
 claude_pid=""
-kimi_pid=""
-# Reviewer process groups die before their tmpdir is removed: an interrupted
-# wrapper must not leave an orphaned reviewer running against the persistent
-# session while a later round starts, so both reviewers launch under job
-# control below.
+# The reviewer process group dies before its tmpdir is removed: an interrupted
+# wrapper must not leave an orphan sharing the persistent session with a later
+# round.
 cleanup() {
-  local pid alive=0
-  for pid in "$claude_pid" "$kimi_pid"; do
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      alive=1
-      kill -TERM -- "-$pid" 2>/dev/null || true
-    fi
-  done
-  if [[ "$alive" -eq 1 ]]; then
+  if [[ -n "$claude_pid" ]] && kill -0 "$claude_pid" 2>/dev/null; then
+    kill -TERM -- "-$claude_pid" 2>/dev/null || true
     sleep 2
-    for pid in "$claude_pid" "$kimi_pid"; do
-      [[ -z "$pid" ]] || kill -KILL -- "-$pid" 2>/dev/null || true
-    done
+    kill -KILL -- "-$claude_pid" 2>/dev/null || true
     wait 2>/dev/null || true
   fi
   rm -rf "$review_tmp"
@@ -412,55 +362,21 @@ run_claude_review() {
   return "$claude_status"
 }
 
-kimi_runner_args=()
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  kimi_runner_args=(
-    --repo "$repo_root"
-    --mode "$mode"
-    --full-bundle "$full_review_bundle"
-    --head "$head_oid"
-    --focus "$focus"
-  )
-  [[ -z "$base_oid" ]] || kimi_runner_args+=(--base "$base_oid")
-  if [[ -n "$since_oid" ]]; then
-    kimi_runner_args+=(--since "$since_oid" --incremental-bundle "$incremental_review_bundle")
-  fi
-  [[ -z "$session_key" ]] || kimi_runner_args+=(--session-key "$session_key")
-  for risk in "${kimi_risks[@]}"; do
-    kimi_runner_args+=(--risk "$risk")
-  done
-fi
 claude_report="$review_tmp/claude-report.txt"
-kimi_report="$review_tmp/kimi-report.txt"
 
 set +e
-# Job control gives each reviewer its own process group so interruption cleanup
-# can terminate the primary reviewer and the shared Kimi runner independently.
+# Job control gives the reviewer its own process group for interruption cleanup.
 set -m
 run_claude_review > "$claude_report" 2>&1 &
 claude_pid=$!
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  "$kimi_runner" "${kimi_runner_args[@]}" > "$kimi_report" &
-  kimi_pid=$!
-fi
 set +m
 wait "$claude_pid"
 claude_status=$?
 claude_pid=""
-kimi_status=0
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  wait "$kimi_pid"
-  kimi_status=$?
-  kimi_pid=""
-fi
 set -e
 
 printf '=== Claude review ===\n'
 cat "$claude_report"
-if [[ "$review_with_kimi" -eq 1 ]]; then
-  printf '=== Kimi selected review ===\n'
-  cat "$kimi_report"
-fi
 
 after_fingerprint="$(repo_fingerprint)"
 if [[ "$before_fingerprint" != "$after_fingerprint" ]]; then
@@ -513,7 +429,4 @@ if [[ -n "$reviewed_state_file" && -n "$base_oid" && -z "$status" ]]; then
   fi
 fi
 
-if [[ "$review_with_kimi" -eq 1 && "$kimi_status" -ne 0 ]]; then
-  exit "$kimi_status"
-fi
 [[ "$claude_verdict" == "PASS" ]] || exit 8
