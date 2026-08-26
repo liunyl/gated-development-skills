@@ -497,6 +497,7 @@ test "$(readlink "$TMP/link.md")" = "$link_before"
 cmp "$TMP/destination.md" "$TMP/destination.before"
 
 FINISH="$ROOT/shared/skills/finish-pr"
+FINISH_BRANCH="$ROOT/shared/skills/finish-branch"
 CODEX_GATE="$ROOT/codex/skills/claude-gated-development/SKILL.md"
 CODEX_GATE_RUNNER="$ROOT/codex/skills/claude-gated-development/scripts/claude-review.sh"
 CLAUDE_GATE="$ROOT/claude/skills/codex-gated-development/SKILL.md"
@@ -505,15 +506,27 @@ test -f "$FINISH/SKILL.md"
 grep -Fq 'name: finish-pr' "$FINISH/SKILL.md"
 grep -Fq 'type(scope): imperative summary' "$FINISH/SKILL.md"
 grep -Fq 'blocks the PR' "$FINISH/SKILL.md"
-grep -Fq 'finishing-a-development-branch' "$FINISH/SKILL.md"
+grep -Fq 'finish-branch' "$FINISH/SKILL.md"
 grep -Fq 'stops after drafting' "$FINISH/SKILL.md"
 grep -Fq 'does not push, merge, synchronize, delete branches, or delete worktrees' "$FINISH/SKILL.md"
-grep -Fq 'Finish: use `finish-pr`, then `/finishing-a-development-branch`' \
+grep -Fq 'Finish: use `finish-pr`, then `finish-branch` when applicable.' \
   "$CLAUDE_GATE"
-grep -Fq 'Finish: use `finish-pr`, then `superpowers:finishing-a-development-branch`' \
+grep -Fq 'Finish: use `finish-pr`, then `finish-branch` when applicable.' \
   "$CODEX_GATE"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$FINISH/SKILL.md"; then
   printf '%s\n' 'finish-pr contains agent-specific commands' >&2
+  exit 1
+fi
+
+test -f "$FINISH_BRANCH/SKILL.md"
+test -f "$FINISH_BRANCH/LICENSE"
+grep -Fq 'name: finish-branch' "$FINISH_BRANCH/SKILL.md"
+grep -Fq 'superpowers:finishing-a-development-branch' "$FINISH_BRANCH/SKILL.md"
+grep -Fq "Type 'discard' to confirm" "$FINISH_BRANCH/SKILL.md"
+grep -Fq 'git worktree prune' "$FINISH_BRANCH/SKILL.md"
+grep -Fq 'Copyright (c) 2025 Jesse Vincent' "$FINISH_BRANCH/LICENSE"
+if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$FINISH_BRANCH/SKILL.md"; then
+  printf '%s\n' 'finish-branch contains agent-specific commands' >&2
   exit 1
 fi
 
@@ -646,6 +659,7 @@ for source_path in \
   'codex/skills/claude-gated-development/' \
   'shared/skills/bootstrap-project/' \
   'shared/skills/finish-pr/' \
+  'shared/skills/finish-branch/' \
   'tests/test-engineering-infrastructure.sh'
 do
   grep -Fq "$source_path" "$OVERVIEW"
@@ -653,6 +667,7 @@ done
 
 grep -Fq 'bootstrap-project' "$ROOT/README.md"
 grep -Fq 'finish-pr' "$ROOT/README.md"
+grep -Fq 'finish-branch' "$ROOT/README.md"
 grep -Fq '.claude/skills' "$ROOT/README.md"
 grep -Fq '.codex/skills' "$ROOT/README.md"
 grep -Fq 'for runtime in .claude .codex .kimi-code; do' "$ROOT/README.md"

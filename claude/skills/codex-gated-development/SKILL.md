@@ -144,5 +144,4 @@ evidence-only rebuttal or after rewritten history.
 - Incremental fix scope: add `--since <previous-reviewed-head>`.
 - One `--session-key` per task; a fresh key means a fresh full review.
 - Verification: use `/verification-before-completion`.
-- Finish: use `finish-pr`, then `/finishing-a-development-branch` when
-  applicable.
+- Finish: use `finish-pr`, then `finish-branch` when applicable.

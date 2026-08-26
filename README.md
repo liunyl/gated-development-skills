@@ -30,6 +30,7 @@ The tool-neutral engineering skills install unchanged in every runtime:
 |-------|---------|
 | `bootstrap-project` | Use when a new or existing repository needs shared engineering instructions, an evidence-grounded architecture baseline, and a pull request template. |
 | `finish-pr` | Use after implementation, before creating or updating a pull request, to audit the final diff and draft the commit and PR content. |
+| `finish-branch` | Use when implementation is complete and tests pass, to choose and execute the branch integration path (merge, PR, keep, or discard). Vendored from Superpowers (MIT). |
 
 ## Install on a new machine
 
@@ -43,7 +44,7 @@ cp -R codex/skills/claude-gated-development ~/.codex/skills/
 
 for runtime in .claude .codex .kimi-code; do
   mkdir -p "$HOME/$runtime/skills"
-  cp -R shared/skills/bootstrap-project shared/skills/finish-pr "$HOME/$runtime/skills/"
+  cp -R shared/skills/bootstrap-project shared/skills/finish-pr shared/skills/finish-branch "$HOME/$runtime/skills/"
 done
 ```
 
@@ -74,7 +75,8 @@ independently.
 Comments and architecture documentation are implementation-time work:
 `bootstrap-project` installs those expectations in the repository instructions.
 `finish-pr` audits the completed change and hands branch lifecycle operations to
-the runtime's established finishing workflow instead of duplicating them.
+the bundled `finish-branch` skill (vendored from Superpowers, MIT) or the
+runtime's established finishing workflow instead of duplicating them.
 
 Codex's engineering workflow also requires Matt Pocock's externally managed
 `code-review` and setup skills:

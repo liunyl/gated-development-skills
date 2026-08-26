@@ -2,12 +2,13 @@
 
 ## System context
 
-This repository distributes two reciprocal review gates and two shared
+This repository distributes two reciprocal review gates and three shared
 engineering workflow skills. Runtime-specific policies remain under `claude/`
 and `codex/`; tool-neutral workflows live under `shared/` and still support
 Claude Code, Codex, and Kimi Code. (`claude/skills/codex-gated-development/`,
 `codex/skills/claude-gated-development/`, `shared/skills/bootstrap-project/`,
-`shared/skills/finish-pr/`) The Codex flow also composes this repository's
+`shared/skills/finish-pr/`, `shared/skills/finish-branch/`) The Codex flow also
+composes this repository's
 `code-simplifier` adapter with the externally managed `code-review` skill from
 `mattpocock/skills`.
 
@@ -21,6 +22,7 @@ Claude Code, Codex, and Kimi Code. (`claude/skills/codex-gated-development/`,
 | Upstream Codex reviewer | Owns the single general-purpose Codex review pass, keeping its `Standards` and `Spec` axes separate. It is installed and updated from `mattpocock/skills`, not vendored here. | Integration contract: `codex/skills/claude-gated-development/SKILL.md`; installation: `README.md` |
 | `bootstrap-project` | Builds an evidence-backed module map and settles the architecture taxonomy before prose, while allowing a repository with at most one durable module to keep readable detail in one overview and preserving an existing equivalent current-architecture hierarchy. | `shared/skills/bootstrap-project/SKILL.md`; `shared/skills/bootstrap-project/assets/`; `shared/skills/bootstrap-project/scripts/update-managed-block.sh` |
 | `finish-pr` | Audits the complete proposed diff, drafts commit and PR content, and hands branch lifecycle work to an established finishing workflow. | `shared/skills/finish-pr/SKILL.md` |
+| `finish-branch` | Completes branch integration after the audit: verifies tests, presents merge/PR/keep/discard options, and owns worktree cleanup with provenance checks. Vendored from `superpowers:finishing-a-development-branch` (MIT) so the workflow works without the external skill collection. | `shared/skills/finish-branch/SKILL.md`; `shared/skills/finish-branch/LICENSE` |
 
 ## Primary flow
 
@@ -49,8 +51,9 @@ Claude Code, Codex, and Kimi Code. (`claude/skills/codex-gated-development/`,
    `codex/skills/claude-gated-development/scripts/claude-review.sh`;
    `shared/skills/bootstrap-project/assets/project-instructions.md`)
 4. After implementation, invoke `finish-pr` to audit evidence and draft the
-   integration artifacts before handing branch operations to the runtime's
-   established finishing workflow. (`shared/skills/finish-pr/SKILL.md`)
+   integration artifacts before handing branch operations to the bundled
+   `finish-branch` skill or the runtime's established finishing workflow.
+   (`shared/skills/finish-pr/SKILL.md`; `shared/skills/finish-branch/SKILL.md`)
 
 ## Cross-cutting invariants
 
@@ -72,6 +75,12 @@ Claude Code, Codex, and Kimi Code. (`claude/skills/codex-gated-development/`,
   `finish-pr` audits it rather than silently repairing it.
   (`shared/skills/bootstrap-project/assets/project-instructions.md`;
   `shared/skills/finish-pr/SKILL.md`)
+- Branch lifecycle mutation has one bundled owner: `finish-branch`, vendored
+  from `superpowers:finishing-a-development-branch` (MIT; see
+  `shared/skills/finish-branch/LICENSE`). `finish-pr` stays read-only for
+  remotes and branch/worktree lifecycle and never duplicates that workflow's
+  mutation, ordering, verification, or provenance logic.
+  (`shared/skills/finish-pr/SKILL.md`; `shared/skills/finish-branch/`)
 - Architecture overviews stay focused on system context, high-level flows,
   cross-cutting invariants, and navigation.
   A repository with at most one durable module may keep readable detail in its
@@ -116,4 +125,5 @@ Claude Code, Codex, and Kimi Code. (`claude/skills/codex-gated-development/`,
 | Upstream Codex review integration | `codex/skills/claude-gated-development/SKILL.md`; `README.md` |
 | Repository bootstrap workflow and managed assets | `shared/skills/bootstrap-project/` |
 | Final PR audit and drafting workflow | `shared/skills/finish-pr/` |
+| Branch integration and worktree cleanup workflow | `shared/skills/finish-branch/` |
 | Engineering infrastructure contract | `tests/test-engineering-infrastructure.sh` |

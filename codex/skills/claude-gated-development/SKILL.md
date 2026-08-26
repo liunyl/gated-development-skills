@@ -109,4 +109,4 @@ For incremental reruns, save the reviewed commit, commit the fixes, then use the
 - Full task scope: add `--base <commit-before-task>`.
 - Incremental fix scope: add `--since <previous-reviewed-head>`.
 - Verification: use `superpowers:verification-before-completion`.
-- Finish: use `finish-pr`, then `superpowers:finishing-a-development-branch` when applicable.
+- Finish: use `finish-pr`, then `finish-branch` when applicable.
