@@ -9,7 +9,7 @@
 
 ## Documentation and comments
 
-Confirm that required comments and architecture documentation were updated with the implementation.
+Confirm required comments are current. For implementation changes, update architecture documentation when the change makes the current architecture model false or materially incomplete; otherwise leave it unchanged. Follow the authoring standard linked from `docs/README.md`.
 
 ## Test plan
 
