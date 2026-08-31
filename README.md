@@ -72,8 +72,11 @@ user profile reaches the gate. The `openai-codex` Claude Code plugin is not
 required for the gate; rescue and stop-hook flows keep using the plugin
 independently.
 
-Comments and architecture documentation are implementation-time work:
+Comments are implementation-time work. Architecture documentation is updated
+alongside implementation only when that implementation makes a current
+architecture claim or core model false or materially incomplete;
 `bootstrap-project` installs those expectations in the repository instructions.
+
 `finish-pr` audits the completed change and hands branch lifecycle operations to
 the bundled `finish-branch` skill (vendored from Superpowers, MIT) or the
 runtime's established finishing workflow instead of duplicating them.

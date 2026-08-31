@@ -30,13 +30,14 @@ grep -Fq 'before drafting architecture prose' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'independent responsibility plus a meaningful interface, data flow, or lifecycle' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'capture its responsibility, evidence paths, and architecture-document destination' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Use the module map to choose the documentation taxonomy' "$BOOTSTRAP/SKILL.md"
-grep -Fq 'Reconcile taxonomy from the module map; preserve equivalent existing content' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Reconcile current claims and taxonomy; preserve equivalent existing content' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'at most one durable module may keep readable architecture detail in one overview' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'multiple durable modules emerge or the detail needs independent navigation' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'two or more independent durable modules' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'subagents are available' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'one bounded module investigation and draft per subagent' "$BOOTSTRAP/SKILL.md"
-grep -Fq 'The parent owns taxonomy, cross-cutting behavior, integration, source-map validation, and conflict resolution' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'The parent owns taxonomy, cross-cutting behavior, integration, authoring-contract enforcement' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'source-map validation, and conflict resolution' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Work locally when the project is smaller or subagents are unavailable' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Empty repositories' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'minimal truthful docs entry point, architecture index, and overview' "$BOOTSTRAP/SKILL.md"
@@ -47,6 +48,42 @@ grep -Fq '`docs/plans/` and `docs/superpowers/` are reserved for historical chan
 grep -Fq 'only when the documentation guide and repository evidence establish that role; do not infer authority from path names alone' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'Current architecture authority lives in `docs/architecture/` by default, or in the repository' "$BOOTSTRAP/SKILL.md"
 grep -Fq 'existing equivalent current-architecture hierarchy' "$BOOTSTRAP/SKILL.md"
+grep -Fq '## Architecture authoring contract' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'compact, present-tense model of the current core design' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Architecture maintenance is claim-driven.' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'existing claim or core model that would otherwise become false or' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'materially incomplete' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'bootstrap and dedicated documentation work may establish the model' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'consolidate existing sediment without an' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'highest useful level of abstraction' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Revise or replace related prose' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'coherent current explanation over appended change narratives' "$BOOTSTRAP/SKILL.md"
+grep -Fq '| Information | Home |' "$BOOTSTRAP/SKILL.md"
+for architecture_home in \
+  'Current-architecture hierarchy' \
+  "Repository's historical design or plan area" \
+  'Operations documentation' \
+  'Nearby source or API documentation' \
+  'Pull request or commit'
+do
+  grep -Fq "$architecture_home" "$BOOTSTRAP/SKILL.md"
+done
+grep -Fq 'Treat this routing as exclusionary.' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'instead of retaining it in architecture as a negative disclaimer' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Record an absent capability only when' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'that absence defines a current system boundary' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'claim-driven freshness rule' "$BOOTSTRAP/SKILL.md"
+grep -Fq "repository's complete architecture authoring standard" "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Single-file current-architecture authority without a separate index' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'place the complete authoring standard in `docs/README.md`' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'Reconcile this contract with any existing authoring guidance in the actual' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'repository evidence rather than adding a second standard' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'architecture file has no separate index' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'put the reconciled' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'contract in `docs/README.md` instead' "$BOOTSTRAP/SKILL.md"
+grep -Fq '`docs/README.md` must point readers to the standard' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'current-architecture entry point' "$BOOTSTRAP/SKILL.md"
+grep -Fq 'instead of creating a competing hierarchy' "$BOOTSTRAP/SKILL.md"
 if grep -Eq 'Task tool|TodoWrite|/codex:|/claude:' "$BOOTSTRAP/SKILL.md"; then
   printf '%s\n' 'bootstrap-project contains agent-specific commands' >&2
   exit 1
@@ -55,6 +92,7 @@ fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 BLOCK="$BOOTSTRAP/assets/project-instructions.md"
+PR_BLOCK="$BOOTSTRAP/assets/pull-request-template.md"
 
 grep -Fq 'introduces, removes, splits, or merges a durable module' "$BLOCK"
 grep -Fq 'Keep the overview focused on system context' "$BLOCK"
@@ -63,6 +101,37 @@ grep -Fq 'by default, or its existing equivalent' "$BLOCK"
 grep -Fq 'at most one durable module may keep readable architecture detail in its overview' "$BLOCK"
 grep -Fq 'When multiple durable modules emerge or detail needs independent navigation' "$BLOCK"
 grep -Fq 'Treat `docs/plans/` and `docs/superpowers/` as historical change context, not authoritative descriptions of the current code.' "$BLOCK"
+grep -Fq 'Treat architecture updates as claim-driven.' "$BLOCK"
+grep -Fq 'false or materially incomplete' "$BLOCK"
+grep -Fq 'Leave it unchanged when no such claim exists.' "$BLOCK"
+grep -Fq 'Dedicated documentation work may correct inaccuracies, fill core-design gaps, or consolidate sediment.' "$BLOCK"
+grep -Fq 'compact, present-tense model of current core design and stable rationale' "$BLOCK"
+grep -Fq 'change-specific motivation and before/after explanation in the pull request or commit' "$BLOCK"
+grep -Fq 'local algorithms, representation details, and performance mechanics near the affected code' "$BLOCK"
+grep -Fq 'omit those narrower details from architecture rather than cataloging them as non-architectural' "$BLOCK"
+grep -Fq 'Revise and consolidate existing architecture prose' "$BLOCK"
+grep -Fq 'Follow the authoring standard linked from `docs/README.md`.' "$BLOCK"
+block_line_count=$(wc -l <"$BLOCK" | tr -d '[:space:]')
+test "$block_line_count" -le 20
+
+# Pull-request review is a lightweight delivery reminder, not a second copy of
+# the authoring contract.
+grep -Fq '## Documentation and comments' "$PR_BLOCK"
+grep -Fq 'For implementation changes, update architecture documentation when' "$PR_BLOCK"
+grep -Fq 'current architecture model' "$PR_BLOCK"
+grep -Fq 'false or materially incomplete' "$PR_BLOCK"
+grep -Fq 'otherwise leave it unchanged' "$PR_BLOCK"
+grep -Fq 'authoring standard linked from `docs/README.md`' "$PR_BLOCK"
+test "$(grep -ic 'architecture' "$PR_BLOCK")" -eq 1
+documentation_line=$(grep -nFx '## Documentation and comments' "$PR_BLOCK" | cut -d: -f1)
+reminder_line=$(grep -nF 'For implementation changes, update architecture documentation when' "$PR_BLOCK" | cut -d: -f1)
+test_plan_line=$(grep -nFx '## Test plan' "$PR_BLOCK" | cut -d: -f1)
+test "$reminder_line" -gt "$documentation_line"
+test "$reminder_line" -lt "$test_plan_line"
+if grep -Eiq '^##[[:space:]]+Architecture review[[:space:]]*$|No architecture update|existing core claim' "$PR_BLOCK"; then
+  printf '%s\n' 'pull-request template contains a redundant architecture-review prompt' >&2
+  exit 1
+fi
 
 test_action() {
   expected=$1
@@ -538,12 +607,28 @@ ARCHITECTURE_INDEX="$ROOT/docs/architecture/README.md"
 OVERVIEW="$ROOT/docs/architecture/01-overview.md"
 
 grep -Fq 'architecture index' "$DOCS_INDEX"
+tr '\n' ' ' <"$DOCS_INDEX" |
+  grep -Fq '[architecture index and authoring standard](architecture/README.md#authoring-standard)'
+grep -Fq 'compact, present-tense model' "$DOCS_INDEX"
+grep -Fq 'not an implementation reference or change log' "$DOCS_INDEX"
+grep -Fq 'Architecture maintenance is claim-driven' "$DOCS_INDEX"
+grep -Fq 'current architectural claim or core model false or materially' "$DOCS_INDEX"
+grep -Fq 'incomplete, and otherwise leave it unchanged' "$DOCS_INDEX"
+grep -Fq 'Dedicated documentation work may' "$DOCS_INDEX"
+grep -Fq 'correct an inaccuracy' "$DOCS_INDEX"
+grep -Fq 'consolidate sediment' "$DOCS_INDEX"
 grep -Fq '`docs/architecture/` tracks the current code' "$DOCS_INDEX"
 grep -Fq 'docs/plans/' "$DOCS_INDEX"
 grep -Fq 'docs/superpowers/' "$DOCS_INDEX"
 grep -Fq 'historical design and implementation plans' "$DOCS_INDEX"
 grep -Fq 'not authoritative for the current code' "$DOCS_INDEX"
-grep -Fq 'evidence-backed module map' "$OVERVIEW"
+grep -Fq 'evidence-backed current-architecture hierarchy' "$OVERVIEW"
+grep -Fq "repository's authoritative architecture hierarchy" "$OVERVIEW"
+grep -Fq 'compact current model' "$OVERVIEW"
+grep -Fq 'managed assets while preserving' "$OVERVIEW"
+grep -Fq 'Architecture is revised' "$OVERVIEW"
+grep -Fq 'current architecture claim or core model' "$OVERVIEW"
+grep -Fq 'false or materially incomplete' "$OVERVIEW"
 grep -Fq 'Architecture overviews stay focused on system context' "$OVERVIEW"
 grep -Fq 'focused numbered subsystem documents' "$OVERVIEW"
 grep -Fq 'at most one durable module may keep readable detail' "$OVERVIEW"
@@ -559,6 +644,33 @@ for file in \
 do
   test -f "$file"
 done
+
+grep -Fq '## Authoring standard' "$ARCHITECTURE_INDEX"
+grep -Fq 'compact, present-tense model of the current core design' "$ARCHITECTURE_INDEX"
+grep -Fq 'Maintenance is claim-driven.' "$ARCHITECTURE_INDEX"
+grep -Fq 'current architectural claim or core model that would otherwise become false or' "$ARCHITECTURE_INDEX"
+grep -Fq 'materially incomplete' "$ARCHITECTURE_INDEX"
+grep -Fq 'Initial bootstrap' "$ARCHITECTURE_INDEX"
+grep -Fq 'dedicated documentation work' "$ARCHITECTURE_INDEX"
+grep -Fq 'highest useful level of abstraction' "$ARCHITECTURE_INDEX"
+grep -Fq 'Revise or replace related prose' "$ARCHITECTURE_INDEX"
+grep -Fq 'stands on its own without the commit' "$ARCHITECTURE_INDEX"
+grep -Fq 'coherent current explanation over appended before-and-after narratives' "$ARCHITECTURE_INDEX"
+grep -Fq '| Information | Home in this repository |' "$ARCHITECTURE_INDEX"
+for dogfood_home in \
+  '`docs/architecture/`' \
+  '`docs/plans/` or `docs/superpowers/`' \
+  '`README.md` or the relevant user-facing guide' \
+  'Nearby skill, script, or API documentation' \
+  'Pull request or commit'
+do
+  grep -Fq "$dogfood_home" "$ARCHITECTURE_INDEX"
+done
+grep -Fq 'Treat this routing as exclusionary.' "$ARCHITECTURE_INDEX"
+grep -Fq 'instead of retaining it as a negative disclaimer or inventory of' "$ARCHITECTURE_INDEX"
+grep -Fq 'only when that absence' "$ARCHITECTURE_INDEX"
+grep -Fq 'defines a current system boundary' "$ARCHITECTURE_INDEX"
+grep -Fq 'Architecture authoring and placement contract' "$ARCHITECTURE_INDEX"
 
 extract_managed_block() {
   source=$1
@@ -621,6 +733,14 @@ done
 
 test "$(grep -Fc '<!-- BEGIN bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
 test "$(grep -Fc '<!-- END bootstrap-project: pull-request-template -->' "$PR_TEMPLATE")" -eq 1
+sed -n \
+  '/^<!-- BEGIN bootstrap-project: pull-request-template -->$/,/^<!-- END bootstrap-project: pull-request-template -->$/p' \
+  "$PR_TEMPLATE" >"$TMP/pr-template-managed.md"
+cmp "$TMP/pr-template-managed.md" "$PR_BLOCK"
+if grep -Eiq '^##[[:space:]]+Architecture review[[:space:]]*$|No architecture update' "$PR_TEMPLATE"; then
+  printf '%s\n' 'dogfood pull-request template contains a redundant architecture-review prompt' >&2
+  exit 1
+fi
 previous_line=0
 for section in \
   '<!-- BEGIN bootstrap-project: pull-request-template -->' \
@@ -644,7 +764,7 @@ done
 
 grep -Fq 'Source map' "$OVERVIEW"
 grep -Fq 'Source map' "$ARCHITECTURE_INDEX"
-grep -Fq 'incremental bundle' "$OVERVIEW"
+grep -Fq 'Incremental rounds require an established full-scope baseline' "$OVERVIEW"
 grep -Fq -- '--since <previous-reviewed-head>' "$ROOT/README.md"
 grep -Fq '~/.kimi-code/skills/kimi-gated-development/' "$ROOT/README.md"
 grep -Fq 'Old `--kimi-risk` wrapper invocations now fail as unknown arguments.' "$ROOT/README.md"
@@ -659,8 +779,7 @@ for source_path in \
   'codex/skills/claude-gated-development/' \
   'shared/skills/bootstrap-project/' \
   'shared/skills/finish-pr/' \
-  'shared/skills/finish-branch/' \
-  'tests/test-engineering-infrastructure.sh'
+  'shared/skills/finish-branch/'
 do
   grep -Fq "$source_path" "$OVERVIEW"
 done
